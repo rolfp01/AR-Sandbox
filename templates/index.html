@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kamera Stream</title>
+    <script>
+        // Funktion, die aufgerufen wird, wenn die "T"-Taste gedrückt wird
+        document.addEventListener('keydown', function(event) {
+            if (event.key === 'T' || event.key === 't') {
+                // HTTP-Anfrage an den Flask-Server senden
+                fetch('/theme_Switch').then(response => {
+                    if (response.ok) {
+                        // Nach erfolgreichem Themawechsel die Seite neu laden
+                        window.location.reload();
+                    } else {
+                        console.error('Fehler beim Thema wechseln');
+                    }
+                });
+            }
+        });
+    </script>
+</head>
+<body>
+    <h1>Kamera Stream</h1>
+    <h6>Thema: {{ current_theme }}</h6>  <!-- Zeigt den aktuellen Themenname -->
+    <img src="{{ url_for('video_feed') }}" alt="Kamera Stream">
+</body>
+</html>
