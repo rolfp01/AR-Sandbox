@@ -1,6 +1,5 @@
 import numpy as np
 import cv2
-from openni import openni2
 
 def calculate_Hight(depth_image):
     if depth_image is None:
@@ -19,7 +18,4 @@ def calculate_Hight(depth_image):
     # Normalisiere das Tiefenbild (für bessere Darstellung)
     depth_normalized = cv2.normalize(depth_image, None, 0, 255, cv2.NORM_MINMAX)
     depth_normalized = np.uint8(depth_normalized)
-
-    # Tiefenbild einfärben
-    depth_colormap = cv2.applyColorMap(depth_normalized, cv2.COLORMAP_JET)
-    return depth_colormap
+    return depth_normalized

@@ -26,6 +26,7 @@ def gray_video():
             calculationOutput = grayPicture.picture_In_Gray(cameraInput)
             beamerOutput = showGrayPicture.show_Gray_Picture(calculationOutput)
         yield beamerOutput
+        
 
 def color_video():
         # Initialisiere OpenNI2
@@ -67,8 +68,8 @@ def color_video():
             openni2.unload()
             cv2.destroyAllWindows()
 
-'''
-def depth_video():
+
+def objects_video():
     # Initialisiere OpenNI2
     openni2.initialize()
 
@@ -76,58 +77,84 @@ def depth_video():
     dev = openni2.Device.open_any()
 
     # Öffne den Farbsensor und den Tiefensensor
+    color_stream = dev.create_color_stream()
     depth_stream = dev.create_depth_stream()
 
     # Starte beide Streams
+    color_stream.start()
     depth_stream.start()
+
+    # Maßstab für Tiefenwerte ermitteln (wie viele Meter pro Tiefen-Einheit)
+    ###depth_sensor = profile.get_device().first_depth_sensor()
+    ###depth_scale = depth_sensor.get_depth_scale()
+    ###print(f"Tiefen-Skalierungsfaktor: {depth_scale} m pro Einheit")
+    depth_scale = 1
+
+    # Optional: Grundabstand kalibrieren (Tiefe zum Sandkastenboden)
+    # Man kann z.B. bei leerer Sandbox die gemessene Tiefe des Bodens erfassen.
+    # Hier nehmen wir an, baseline_distance ist unbekannt und verwenden relative Höhe.
+    baseline_distance = None  # in Metern (falls bekannt, z.B. gemessen)
 
     try:
         while True:
-
-            # Lese ein Frame vom Tiefensensor
-            depth_frame = depth_stream.read_frame()
-            depth_data = depth_frame.get_buffer_as_uint16()
-            depth_image = np.frombuffer(depth_data, dtype=np.uint16).reshape((depth_frame.height, depth_frame.width))
-
-            # Normalisiere das Tiefenbild (für bessere Darstellung)
-            depth_normalized = cv2.normalize(depth_image, None, 0, 255, cv2.NORM_MINMAX)
-            depth_normalized = np.uint8(depth_normalized)
-
-            # Tiefenbild einfärben
-            depth_colormap = cv2.applyColorMap(depth_normalized, cv2.COLORMAP_JET)
-    
-            # Konvertiere das Bild in JPEG-Format
-            ret, buffer = cv2.imencode('.jpg', depth_colormap)
-            frame = buffer.tobytes() # Bild in Bytes umwandeln
-            beamerOutput = (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-
-            # Wenn 'q' gedrückt wird, beenden
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
+            color_and_depth_image = readAsusXtionCamera.read_Depth_Camera(color_stream, depth_stream)
+            building_mask, road_mask, park_mask = detectBuildings.detect_Buildings(color_and_depth_image["depth"], color_and_depth_image["color"], depth_scale, baseline_distance)
+            ret, beamerOutput = showObjects.show_Objects(building_mask, road_mask, park_mask)
+            if not ret:
+                continue  # Wenn die Bildkonvertierung fehlschlägt, überspringe diesen Frame
+        
             yield beamerOutput
-
     finally:
-        # Stoppe den Farbsensor und schließe OpenNI2
+        # Stoppe die Streams und schließe alle Fenster
+        color_stream.stop()
         depth_stream.stop()
         openni2.unload()
         cv2.destroyAllWindows()
-'''
 
-'''
-def objects_video():
-    #while True:
-        cameraInput = readDepthCamera.read_Depth_Camera()
-        #calculationOutput = detectBuildings.detect_Buildings(cameraInput)
-        #beamerOutput = showObjects.show_Objects(calculationOutput)
-        #yield beamerOutput
 
 def volume_2D_video():
-    #while True:
-        cameraInput = readDepthCamera.read_Depth_Camera()
-        #calculationOutput = calculate2DVolume.calculate_2D_Volume(cameraInput)
-        #beamerOutput = show2DVolume.show_2D_Volume(calculationOutput)
-        #yield beamerOutput
-        '''
+    # Initialisiere OpenNI2
+    openni2.initialize()
+
+    # Öffne die Kamera
+    dev = openni2.Device.open_any()
+
+    # Öffne den Farbsensor und den Tiefensensor
+    color_stream = dev.create_color_stream()
+    depth_stream = dev.create_depth_stream()
+
+    # Starte beide Streams
+    color_stream.start()
+    depth_stream.start()
+
+    # Maßstab für Tiefenwerte ermitteln (wie viele Meter pro Tiefen-Einheit)
+    ###depth_sensor = profile.get_device().first_depth_sensor()
+    ###depth_scale = depth_sensor.get_depth_scale()
+    ###print(f"Tiefen-Skalierungsfaktor: {depth_scale} m pro Einheit")
+    depth_scale = 1
+
+    # Optional: Grundabstand kalibrieren (Tiefe zum Sandkastenboden)
+    # Man kann z.B. bei leerer Sandbox die gemessene Tiefe des Bodens erfassen.
+    # Hier nehmen wir an, baseline_distance ist unbekannt und verwenden relative Höhe.
+    baseline_distance = None  # in Metern (falls bekannt, z.B. gemessen)
+
+    try:
+        while True:
+            color_and_depth_image = readAsusXtionCamera.read_Depth_Camera(color_stream, depth_stream)
+            building_mask, road_mask, park_mask = detectBuildings.detect_Buildings(color_and_depth_image["depth"], color_and_depth_image["color"], depth_scale, baseline_distance)
+            calculationOutput = calculate2DVolume.calculate_2D_Volume(color_and_depth_image['depth'], building_mask, road_mask, park_mask)
+            ret, beamerOutput = show2DVolume.show_2D_Volume(calculationOutput)
+            if not ret:
+                continue  # Wenn die Bildkonvertierung fehlschlägt, überspringe diesen Frame
+        
+            yield beamerOutput
+    finally:
+        # Stoppe die Streams und schließe alle Fenster
+        color_stream.stop()
+        depth_stream.stop()
+        openni2.unload()
+        cv2.destroyAllWindows()
+        
 
 def hights_video():
     # Initialisiere OpenNI2
@@ -162,7 +189,7 @@ def hights_video():
 activeVideoTheme = 0
 videoThemes = [
     VideoTheme(0, "Graustufen Video", gray_video),
-    VideoTheme(1, "Objekte", color_video),
+    VideoTheme(1, "Objekte", objects_video),
     VideoTheme(2, "2D Lautstärke", color_video),
     VideoTheme(3, "Höhe", hights_video)
 ]
