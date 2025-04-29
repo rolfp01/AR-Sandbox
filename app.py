@@ -1,11 +1,12 @@
 from flask import Flask, redirect, render_template, Response, session, url_for, jsonify
 
 from DataCalculation import calculate2DVolume, calculateHight, detectBuildings, grayPicture
-from DataRead import readAsusXtionCamera, readLaptopCamera
-from DataShow import show2DVolume, showGrayPicture, showHight, showObjects
+from DataRead import readAsusXtionCamera, readLaptopCamera, readIntelD415Camera
+from DataShow import show2DVolume, showGrayPicture, showHight, showObjects, showColorAndDepth
 import numpy as np
 import cv2
 from openni import openni2
+import pyrealsense2 as rs
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'  # Füge hier deinen geheimen Schlüssel hinzu
@@ -186,12 +187,53 @@ def hights_video():
         openni2.unload()
         cv2.destroyAllWindows()
 
+def intel_video():
+    # Configure depth and color streams
+    pipeline = rs.pipeline()
+    config = rs.config()
+
+    # Get device product line for setting a supporting resolution
+    pipeline_wrapper = rs.pipeline_wrapper(pipeline)
+    pipeline_profile = config.resolve(pipeline_wrapper)
+    device = pipeline_profile.get_device()
+
+    found_rgb = False
+    for s in device.sensors:
+        if s.get_info(rs.camera_info.name) == 'RGB Camera':
+            found_rgb = True
+            break
+    if not found_rgb:
+        print("The demo requires Depth camera with Color sensor")
+        exit(0)
+
+    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+
+    # Start streaming
+    pipeline.start(config)
+
+    try:
+        while True:
+            color_and_depth_image = readIntelD415Camera.read_Depth_Camera(pipeline)
+            ret, beamerOutput = showColorAndDepth.show_Color_And_Depth(cv2.convertScaleAbs(color_and_depth_image["depth"], alpha=0.03), color_and_depth_image["color"])
+            if not ret:
+                continue  # Wenn die Bildkonvertierung fehlschlägt, überspringe diesen Frame
+        
+            yield beamerOutput
+
+    finally:
+        # Ressourcen freigeben
+        pipeline.stop()
+        cv2.destroyAllWindows()
+
 activeVideoTheme = 0
 videoThemes = [
     VideoTheme(0, "Graustufen Video", gray_video),
     VideoTheme(1, "Objekte", objects_video),
     VideoTheme(2, "2D Lautstärke", color_video),
-    VideoTheme(3, "Höhe", hights_video)
+    VideoTheme(3, "Höhe", hights_video),
+    VideoTheme(4, "Intel Real Sense", intel_video)
+
 ]
 
 @app.route('/')
