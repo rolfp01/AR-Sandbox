@@ -23,7 +23,8 @@
 </head>
 <body>
     <h1>Kamera Stream</h1>
-    <h6>Thema: {{ current_theme }} Mit der T-Taste nächstes Theme aktivieren</h6>  <!-- Zeigt den aktuellen Themenname -->
+    <h6>Thema: {{ current_theme }}</h6> <!-- Zeigt den aktuellen Themenname -->
+    <h5>Mit der T-Taste nächstes Theme aktivieren</h5> 
     <img src="{{ url_for('video_feed') }}" alt="Kamera Stream" width="70%">
 </body>
 </html>

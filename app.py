@@ -19,16 +19,23 @@ class VideoTheme:
         self.funct = funct
 
 def gray_video():
-    while True:
-        cameraInput = readLaptopCamera.read_Laptop_Camera()
-        if type(cameraInput) == 'NoneType':
-            continue
-        else: 
-            calculationOutput = grayPicture.picture_In_Gray(cameraInput)
-            beamerOutput = showGrayPicture.show_Gray_Picture(calculationOutput)
-        yield beamerOutput
+    try:
+        camera = cv2.VideoCapture(0) # 0 für die Standardkamera
+        while True:
+            success, frame = camera.read() # Bild von der Kamera lesen
+            if success:
+                cameraInput = readLaptopCamera.read_Laptop_Camera(frame)
+                if type(cameraInput) == 'NoneType':
+                    continue
+                else: 
+                    calculationOutput = grayPicture.picture_In_Gray(cameraInput)
+                    beamerOutput = showGrayPicture.show_Gray_Picture(calculationOutput)
+                yield beamerOutput
         
-
+    finally:
+        openni2.unload()
+        cv2.destroyAllWindows()
+        
 def color_video():
         # Initialisiere OpenNI2
         openni2.initialize()
@@ -68,7 +75,6 @@ def color_video():
             color_stream.stop()
             openni2.unload()
             cv2.destroyAllWindows()
-
 
 def objects_video():
     # Initialisiere OpenNI2
@@ -111,7 +117,6 @@ def objects_video():
         depth_stream.stop()
         openni2.unload()
         cv2.destroyAllWindows()
-
 
 def volume_2D_video():
     # Initialisiere OpenNI2
@@ -156,7 +161,6 @@ def volume_2D_video():
         openni2.unload()
         cv2.destroyAllWindows()
         
-
 def hights_video():
     # Initialisiere OpenNI2
     openni2.initialize()
@@ -230,7 +234,7 @@ activeVideoTheme = 0
 videoThemes = [
     VideoTheme(0, "Graustufen Video", gray_video),
     VideoTheme(1, "Objekte", objects_video),
-    VideoTheme(2, "2D Lautstärke", color_video),
+    VideoTheme(2, "2D Lautstärke TODO", color_video),
     VideoTheme(3, "Höhe", hights_video),
     VideoTheme(4, "Intel Real Sense", intel_video)
 
