@@ -1,8 +1,8 @@
 from flask import Flask, redirect, render_template, Response, session, url_for, jsonify
 
-from DataCalculation import calculate2DVolume, calculateHight, detectBuildings, grayPicture
+from DataCalculation import calculate2DVolume, calculateHight, calculateRGB, detectBuildings, grayPicture
 from DataRead import readAsusXtionCamera, readLaptopCamera, readIntelD415Camera
-from DataShow import show2DVolume, showGrayPicture, showHight, showObjects, showColorAndDepth
+from DataShow import show2DVolume, showGrayPicture, showHight, showRGB, showObjects, showColorAndDepth
 import numpy as np
 import cv2
 from openni import openni2
@@ -36,45 +36,33 @@ def gray_video():
         openni2.unload()
         cv2.destroyAllWindows()
         
-def color_video():
-        # Initialisiere OpenNI2
-        openni2.initialize()
+def color_video():    
+    # Initialisiere OpenNI2
+    openni2.initialize()
 
-        # Öffne die Kamera
-        dev = openni2.Device.open_any()
+    # Öffne die Kamera
+    dev = openni2.Device.open_any()
 
-        # Öffne den Farbsensor und den Tiefensensor
-        color_stream = dev.create_color_stream()
+    # Öffne den Farbsensor und den Tiefensensor
+    color_stream = dev.create_color_stream()
 
-        # Starte beide Streams
-        color_stream.start()
+    # Starte beide Streams
+    color_stream.start()
+    try:
+        while True:
+            color_image = readAsusXtionCamera.read_Depth_Camera_only_color(color_stream)
+            calculationOutput = calculateRGB.calculate_Colors(color_image)
+            ret, beamerOutput = showRGB.show_Colors(calculationOutput)
+            if not ret:
+                continue  # Wenn die Bildkonvertierung fehlschlägt, überspringe diesen Frame
+        
+            yield beamerOutput
 
-        try:
-            while True:
-
-                # Lese ein Frame vom Farbsensor
-                color_frame = color_stream.read_frame()
-                color_data = color_frame.get_buffer_as_uint8()
-                color_image = np.frombuffer(color_data, dtype=np.uint8).reshape((color_frame.height, color_frame.width, 3))
-
-                # Wenn das Bild im RGB-Format vorliegt (was häufig der Fall ist), invertiere die Kanäle:
-                color_image = color_image[..., ::-1]  # BGR -> RGB Umkehrung
-
-                # Konvertiere das Bild in JPEG-Format
-                ret, buffer = cv2.imencode('.jpg', color_image)
-                frame = buffer.tobytes() # Bild in Bytes umwandeln
-                beamerOutput = (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-
-                # Wenn 'q' gedrückt wird, beenden
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-                yield beamerOutput
-
-        finally:
-            # Stoppe den Farbsensor und schließe OpenNI2
-            color_stream.stop()
-            openni2.unload()
-            cv2.destroyAllWindows()
+    finally:
+        # Stoppe den Farbsensor und schließe OpenNI2
+        color_stream.stop()
+        openni2.unload()
+        cv2.destroyAllWindows()
 
 def objects_video():
     # Initialisiere OpenNI2
@@ -169,16 +157,14 @@ def hights_video():
     dev = openni2.Device.open_any()
 
     # Öffne den Farbsensor und den Tiefensensor
-    color_stream = dev.create_color_stream()
     depth_stream = dev.create_depth_stream()
 
     # Starte beide Streams
-    color_stream.start()
     depth_stream.start()
     try:
         while True:
-            color_and_depth_image = readAsusXtionCamera.read_Depth_Camera(color_stream, depth_stream)
-            calculationOutput = calculateHight.calculate_Hight(color_and_depth_image["depth"])
+            depth_image = readAsusXtionCamera.read_Depth_Camera_only_depth(depth_stream)
+            calculationOutput = calculateHight.calculate_Hight(depth_image)
             ret, beamerOutput = showHight.show_Hights(calculationOutput)
             if not ret:
                 continue  # Wenn die Bildkonvertierung fehlschlägt, überspringe diesen Frame
@@ -186,7 +172,6 @@ def hights_video():
             yield beamerOutput
     finally:
         # Stoppe die Streams und schließe alle Fenster
-        color_stream.stop()
         depth_stream.stop()
         openni2.unload()
         cv2.destroyAllWindows()
@@ -234,9 +219,10 @@ activeVideoTheme = 0
 videoThemes = [
     VideoTheme(0, "Graustufen Video", gray_video),
     VideoTheme(1, "Objekte", objects_video),
-    VideoTheme(2, "2D Lautstärke TODO", color_video),
-    VideoTheme(3, "Höhe", hights_video),
-    VideoTheme(4, "Intel Real Sense", intel_video)
+    VideoTheme(2, "2D Lautstärke TODO", volume_2D_video),
+    VideoTheme(3, "RGB", color_video),
+    VideoTheme(4, "Höhe", hights_video),
+    VideoTheme(5, "Intel Real Sense", intel_video)
 
 ]
 
