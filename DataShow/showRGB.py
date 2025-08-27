@@ -1,6 +1,4 @@
-import numpy as np
 import cv2
-from openni import openni2
 
 def show_Colors(calculationOutput):
     if calculationOutput is not None:

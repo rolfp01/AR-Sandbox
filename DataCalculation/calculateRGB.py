@@ -1,5 +1,4 @@
-import numpy as np
-import cv2
+
 
 def calculate_Colors(color_image):
     # Wenn das Bild im RGB-Format vorliegt (was häufig der Fall ist), invertiere die Kanäle:

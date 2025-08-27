@@ -1,6 +1,4 @@
 import numpy as np
-import cv2
-from openni import openni2
 
 def read_Depth_Camera(color_stream, depth_stream):
     # Lese ein Frame vom Farbsensor
