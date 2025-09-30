@@ -6,16 +6,17 @@ def calculate_Hight(depth_image):
         raise ValueError("depth_image is None, please check your depth camera input")
     #if depth_image.dtype != np.uint8:
     #    depth_image = np.uint8(depth_image)
+    depth_smoothed = cv2.medianBlur(depth_image, 5)
 
     # Bestimme den minimalen und maximalen Tiefenwert
-    min_depth = np.min(depth_image)
-    max_depth = np.max(depth_image)
+    min_depth = np.min(depth_smoothed)
+    max_depth = np.max(depth_smoothed)
 
     # Verhindere die Division durch Null, wenn alle Werte gleich sind
     if min_depth == max_depth:
         raise ValueError("The depth image has no variation in depth values.")
 
     # Normalisiere das Tiefenbild (für bessere Darstellung)
-    depth_normalized = cv2.normalize(depth_image, None, 0, 255, cv2.NORM_MINMAX)
+    depth_normalized = cv2.normalize(depth_smoothed, None, 0, 255, cv2.NORM_MINMAX)
     depth_normalized = np.uint8(depth_normalized)
     return depth_normalized

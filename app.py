@@ -5,18 +5,36 @@ from DataRead import readAsusXtionCamera, readLaptopCamera, readIntelD415Camera
 from DataShow import show2DVolume, showGrayPicture, showHight, showRGB, showObjects, showColorAndDepth
 import numpy as np
 import cv2
-from openni import openni2
+#from openni import openni2
 import pyrealsense2 as rs
+from primesense import openni2
+import os
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
+
+# am Programmstart (z.B. ganz oben)
+OPENNI2_INITIALIZED = False
+
+def init_openni2():
+    global OPENNI2_INITIALIZED
+    if not OPENNI2_INITIALIZED:
+        openni_path = "C:\\Program Files\\OpenNI2\\Redist"
+        openni2.initialize(openni_path)
+        OPENNI2_INITIALIZED = True
+
+def unload_openni2():
+    global OPENNI2_INITIALIZED
+    if OPENNI2_INITIALIZED:
+        openni2.unload()
+        OPENNI2_INITIALIZED = False
 
 # ============================================================================
 # Kamera-Konfiguration - HIER ÄNDERN!
 # ============================================================================
 # Wähle die Kamera für ALLE Themen:
-# Optionen: 'laptop', 'asus_xtion', 'intel_d415'
-ACTIVE_CAMERA = 'intel_d415'
+# Optionen: 'laptop', 'asus_xtion', 'intel_d415', 'kinect
+ACTIVE_CAMERA = 'asus_xtion'
 
 
 # ============================================================================
@@ -41,6 +59,43 @@ class BaseCameraManager:
     def stop(self):
         """Stoppt die Kamera - muss von Unterklassen implementiert werden"""
         raise NotImplementedError
+    
+class KinectCameraManager(BaseCameraManager):
+    """Manager für Microsoft Kinect Kamera (Kinect v2) geht nur mit Python 3.8"""
+    
+    def __init__(self):
+        super().__init__()
+        self.kinect = None
+    
+    def start(self):
+        from pykinect2 import PyKinectRuntime, PyKinectV2
+        self.kinect = PyKinectRuntime.PyKinectRuntime(PyKinectV2.FrameSourceTypes_Color | PyKinectV2.FrameSourceTypes_Depth)
+        print("Microsoft Kinect erfolgreich initialisiert")
+    
+    def read_frame(self):
+        if self.kinect.has_new_color_frame() and self.kinect.has_new_depth_frame():
+            color_frame = self.kinect.get_last_color_frame()
+            depth_frame = self.kinect.get_last_depth_frame()
+            
+            # Color Frame in ein numpy Array umwandeln (BGRA 1920x1080)
+            color_image = color_frame.reshape((1080, 1920, 4)).astype(np.uint8)
+            # In BGR konvertieren für OpenCV (falls gewünscht)
+            color_image = cv2.cvtColor(color_image, cv2.COLOR_BGRA2BGR)
+            
+            # Depth Frame (512x424) in numpy Array
+            depth_image = depth_frame.reshape((424, 512)).astype(np.uint16)
+            
+            return {
+                "color": color_image,
+                "depth": depth_image
+            }
+        return None
+    
+    def stop(self):
+        if self.kinect:
+            self.kinect.close()
+        cv2.destroyAllWindows()
+        print("Microsoft Kinect gestoppt")
 
 
 class LaptopCameraManager(BaseCameraManager):
@@ -73,35 +128,79 @@ class LaptopCameraManager(BaseCameraManager):
 
 
 class AsusXtionCameraManager(BaseCameraManager):
-    """Manager für Asus Xtion Kamera"""
+    """Manager für Asus XtionPRO Live Tiefenkamera über OpenNI2 (primesense)"""
     
     def __init__(self):
         super().__init__()
-        self.dev = None
+        self.device = None
         self.color_stream = None
         self.depth_stream = None
-    
+        self.openni2_initialized = False
+
     def start(self):
-        openni2.initialize()
-        self.dev = openni2.Device.open_any()
-        self.color_stream = self.dev.create_color_stream()
+        init_openni2()
+        self.device = openni2.Device.open_any()
+        if not self.device:
+            raise RuntimeError("OpenNI2 Gerät konnte nicht geöffnet werden")
+
+        self.color_stream = self.device.create_color_stream()
+        if not self.color_stream:
+            raise RuntimeError("Farb-Stream konnte nicht erstellt werden")
         self.color_stream.start()
-        print("Asus Xtion erfolgreich initialisiert")
-    
+
+        self.depth_stream = self.device.create_depth_stream()
+        if not self.depth_stream:
+            raise RuntimeError("Tiefen-Stream konnte nicht erstellt werden")
+        self.depth_stream.start()
+
+        print("Asus XtionPRO Live erfolgreich initialisiert (OpenNI2/primesense)")
+
     def read_frame(self):
-        color_image = readAsusXtionCamera.read_Depth_Camera_only_color(self.color_stream)
-        return {
-            "color": color_image,
-            "depth": None  # Kann erweitert werden, wenn Tiefendaten benötigt werden
-        }
-    
+        if not self.color_stream or not self.depth_stream:
+            print("[WARNUNG] Kamera-Streams nicht aktiv")
+            return None
+
+        try:
+            # Farbbild lesen
+            c_frame = self.color_stream.read_frame()
+            width, height = c_frame.width, c_frame.height
+            c_data = c_frame.get_buffer_as_uint8()
+
+            if len(c_data) == width * height * 3:
+                color = np.frombuffer(c_data, dtype=np.uint8).reshape((height, width, 3))
+                # RGB zu BGR konvertieren (für OpenCV)
+                color = cv2.cvtColor(color, cv2.COLOR_RGB2BGR)
+            elif len(c_data) == width * height:
+                # 1 Kanal (Graustufen)
+                color = np.frombuffer(c_data, dtype=np.uint8).reshape((height, width))
+                color = cv2.cvtColor(color, cv2.COLOR_GRAY2BGR)
+            else:
+                print(f"[WARNUNG] Unerwartete Farbbildgröße: {len(c_data)} Bytes")
+                return None
+
+            # Tiefenbild lesen
+            d_frame = self.depth_stream.read_frame()
+            depth = np.frombuffer(d_frame.get_buffer_as_uint16(), dtype=np.uint16).reshape((d_frame.height, d_frame.width))
+
+            return {
+                "color": color,
+                "depth": depth
+            }
+
+        except Exception as e:
+            print(f"[FEHLER] Fehler beim Lesen des Kamera-Frames: {e}")
+            return None
+
     def stop(self):
         if self.color_stream:
             self.color_stream.stop()
-        openni2.unload()
+            self.color_stream = None
+        if self.depth_stream:
+            self.depth_stream.stop()
+            self.depth_stream = None
+        # Nicht hier openni2.unload() aufrufen!
         cv2.destroyAllWindows()
-        print("Asus Xtion gestoppt")
-
+        print("Asus XtionPRO Live gestoppt")
 
 class IntelD415CameraManager(BaseCameraManager):
     """Manager für Intel RealSense D415 Kamera"""
@@ -160,6 +259,8 @@ def create_camera_manager(camera_type):
         return AsusXtionCameraManager()
     elif camera_type == "intel_d415":
         return IntelD415CameraManager()
+    elif camera_type == "kinect":
+        return KinectCameraManager()
     else:
         raise ValueError(f"Unbekannter Kamera-Typ: {camera_type}")
 
@@ -270,7 +371,7 @@ def process_heights_video(camera, frame_data):
     return beamer_output if ret else None
 
 
-def process_intel_raw_video(camera, frame_data):
+def process_double_video(camera, frame_data):
     """Verarbeitet rohes Intel RealSense Video"""
     if frame_data["depth"] is None or frame_data["color"] is None:
         return None
@@ -306,7 +407,7 @@ videoThemes = [
     VideoTheme(2, "2D Volumen", process_volume_2d_video),
     VideoTheme(3, "RGB", process_color_video),
     VideoTheme(4, "Höhe", process_heights_video),
-    VideoTheme(5, "Intel RealSense Raw", process_intel_raw_video)
+    VideoTheme(5, "Doppel Bild", process_double_video)
 ]
 
 

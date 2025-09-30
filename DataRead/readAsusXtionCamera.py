@@ -16,11 +16,17 @@ def read_Depth_Camera(color_stream, depth_stream):
     return {"color" :color_image, "depth":depth_image}
 
 def read_Depth_Camera_only_color(color_stream):
-    # Lese ein Frame vom Farbsensor
-    color_frame = color_stream.read_frame()
-    color_data = color_frame.get_buffer_as_uint8()
-    color_image = np.frombuffer(color_data, dtype=np.uint8).reshape((color_frame.height, color_frame.width, 3))
-    return color_image
+    try:
+        color_frame = color_stream.read_frame()
+        color_data = color_frame.get_buffer_as_uint8()
+        color_image = np.frombuffer(color_data, dtype=np.uint8).reshape(
+            (color_frame.height, color_frame.width, 3)
+        )
+        return color_image
+    except Exception as e:
+        print(f"[ERROR] Fehler beim Lesen des Farbbildes: {e}")
+        return None
+
       
 def read_Depth_Camera_only_depth(depth_stream):
     # Lese ein Frame vom Tiefensensor
