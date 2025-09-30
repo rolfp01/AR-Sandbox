@@ -14,47 +14,64 @@ def detect_Buildings(depth_image, color_image, depth_scale, baseline_distance):
     park_mask = np.zeros_like(depth_image, dtype=np.uint8)
 
     # *** Gebäude-Erkennung auf Basis der Höhe (Tiefenbild) ***
-    # Wir nehmen an, "Gebäude" sind Bereiche, die deutlich über der umgebenden Sandhöhe liegen.
-    depth_array = depth_image.astype(np.float32) * depth_scale  # Tiefenwerte in Meter
-
-    # Invertiere Tiefe zur "Höhe"
+    depth_array = depth_image.astype(np.float32) * depth_scale
+    
+    # Höhenkarte berechnen
     valid = depth_array > 0
-    height_map = np.zeros_like(depth_array)
-    if np.any(valid):
-        max_depth = np.max(depth_array[valid])
-        height_map = max_depth - depth_array  # je niedriger der Wert, desto höher das Objekt
-
-    # Lokale Mittelwert-Glättung, um Umgebungshöhe zu schätzen
-    blurred_height = cv2.blur(height_map, (15, 15))
-    relative_height = height_map - blurred_height  # Positive Werte = über Umgebung
-
-    # Binärmaske für "potenziell hohes Objekt"
-    raw_building_mask = (relative_height > 0.02).astype(np.uint8) * 255  # ab 2 cm über Umgebung
-    abs_height_mask = (height_map > 0.04).astype(np.uint8) * 255  # 4 cm
-    raw_building_mask = cv2.bitwise_and(raw_building_mask, abs_height_mask)
-
-    # Morphologische Glättung
-    kernel = np.ones((5, 5), np.uint8)
-    clean_building_mask = cv2.morphologyEx(raw_building_mask, cv2.MORPH_OPEN, kernel)
-    clean_building_mask = cv2.morphologyEx(clean_building_mask, cv2.MORPH_CLOSE, kernel)
-
-    # Konturbasierte Selektion: kompakte, große Objekte
-    building_mask = np.zeros_like(clean_building_mask)
-    contours, _ = cv2.findContours(clean_building_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
+    if not np.any(valid):
+        return building_mask, road_mask, park_mask
+        
+    max_depth = np.max(depth_array[valid])
+    height_map = max_depth - depth_array
+    height_map[~valid] = 0
+    
+    # Hintergrund-Schätzung mit mittlerem Kernel
+    background = cv2.GaussianBlur(height_map, (21, 21), 0)
+    relative_height = height_map - background
+    
+    # NIEDRIGERE Schwellwerte - wichtig für LEGO-Erkennung!
+    height_threshold = 0.006  # 6mm relative Höhe (noch niedriger)
+    abs_height_threshold = 0.015  # 1.5cm absolute Höhe (noch niedriger)
+    
+    # Binäre Maske für erhöhte Objekte
+    building_candidate = ((relative_height > height_threshold) & 
+                          (height_map > abs_height_threshold)).astype(np.uint8) * 255
+    
+    # WICHTIG: Erst CLOSE, dann OPEN - verhindert Fragmentierung!
+    kernel_close = np.ones((9, 9), np.uint8)  # Größerer Kernel zum Zusammenfügen
+    kernel_open = np.ones((3, 3), np.uint8)   # Kleiner Kernel für Rauschen
+    
+    # Erst Lücken schließen (CLOSE)
+    building_clean = cv2.morphologyEx(building_candidate, cv2.MORPH_CLOSE, kernel_close, iterations=2)
+    # Dann kleine Störungen entfernen (OPEN)
+    building_clean = cv2.morphologyEx(building_clean, cv2.MORPH_OPEN, kernel_open, iterations=1)
+    
+    # Konturfilterung
+    contours, _ = cv2.findContours(building_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if area < 100:
-            continue  # zu klein
-
-        # Kompaktheit: Kreisförmige Objekte (z. B. Hügel) sind meist weniger "eckig"
+        
+        # Sehr niedrige Mindestgröße
+        if area < 30:  # Noch niedriger!
+            continue
+        
         perimeter = cv2.arcLength(cnt, True)
         if perimeter == 0:
             continue
-
-        compactness = (4 * np.pi * area) / (perimeter ** 2)  # 1 = Kreis, < 1 = eckiger
-        if compactness < 0.6:  # zu rund = eher Hügel
+        
+        # Kompaktheit: 1.0 = perfekter Kreis, niedrigere Werte = eckiger
+        compactness = (4 * np.pi * area) / (perimeter ** 2)
+        
+        # Sehr tolerante Form-Kriterien
+        if compactness < 0.85:  # Fast alles akzeptieren
             cv2.drawContours(building_mask, [cnt], -1, 255, -1)
+        elif area > 200:  # Mittelgroße Objekte auch wenn runder
+            cv2.drawContours(building_mask, [cnt], -1, 255, -1)
+    
+    # ZUSÄTZLICH: Nochmal CLOSE auf dem Endergebnis für zusammenhängende Gebäude
+    building_mask = cv2.morphologyEx(building_mask, cv2.MORPH_CLOSE, np.ones((11, 11), np.uint8), iterations=1)
+
 
     # *** Straßen-Erkennung auf Basis von Farbe/Form ***
     # 1. Farbbasierte Grau-Erkennung im HSV
