@@ -1,4 +1,5 @@
 import numpy as np
+import pyrealsense2 as rs
 
 def read_Depth_Camera(pipeline):
     # Warten auf neue Frames
@@ -6,9 +7,19 @@ def read_Depth_Camera(pipeline):
     color_frame = frames.get_color_frame()
     depth_frame = frames.get_depth_frame()
 
+    # Threshold Filter initialisieren
+    threshold_filter = rs.threshold_filter()
+    threshold_filter.set_option(rs.option.min_distance, 0.5)  # in Metern
+    threshold_filter.set_option(rs.option.max_distance, 0.9)  # in Metern
+    filtered_depth = threshold_filter.process(depth_frame)
+
+
     # Frames in numpy-Arrays umwandeln
     color_image = np.asanyarray(color_frame.get_data())
-    depth_image = np.asanyarray(depth_frame.get_data())
+    depth_image = np.asanyarray(filtered_depth.get_data())
+
+    # Einfach: mit rechten Nachbarwerten füllen
+    depth_image[:, :60] = depth_image[:, 60:120]
 
     return {"color" :color_image, "depth":depth_image}
     

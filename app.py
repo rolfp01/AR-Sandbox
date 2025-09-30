@@ -19,39 +19,70 @@ class VideoTheme:
         self.funct = funct
 
 def gray_video():
+    # Configure depth and color streams
+    pipeline = rs.pipeline()
+    config = rs.config()
+
+    # Get device product line for setting a supporting resolution
+    pipeline_wrapper = rs.pipeline_wrapper(pipeline)
+    pipeline_profile = config.resolve(pipeline_wrapper)
+    device = pipeline_profile.get_device()
+
+    found_rgb = False
+    for s in device.sensors:
+        if s.get_info(rs.camera_info.name) == 'RGB Camera':
+            found_rgb = True
+            break
+    if not found_rgb:
+        print("The demo requires Depth camera with Color sensor")
+        exit(0)
+
+    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+
+    # Start streaming
+    pipeline.start(config)
     try:
-        camera = cv2.VideoCapture(0) # 0 für die Standardkamera
         while True:
-            success, frame = camera.read() # Bild von der Kamera lesen
-            if success:
-                cameraInput = readLaptopCamera.read_Laptop_Camera(frame)
-                if type(cameraInput) == 'NoneType':
-                    continue
-                else: 
-                    calculationOutput = grayPicture.picture_In_Gray(cameraInput)
-                    beamerOutput = showGrayPicture.show_Gray_Picture(calculationOutput)
-                yield beamerOutput
-        
+            color_and_depth_image = readIntelD415Camera.read_Depth_Camera(pipeline)
+            calculationOutput = grayPicture.picture_In_Gray(color_and_depth_image["color"])
+            beamerOutput = showGrayPicture.show_Gray_Picture(calculationOutput)
+            
+            yield beamerOutput
+
     finally:
-        openni2.unload()
+        # Ressourcen freigeben
+        pipeline.stop()
         cv2.destroyAllWindows()
         
 def color_video():    
-    # Initialisiere OpenNI2
-    openni2.initialize()
+    # Configure depth and color streams
+    pipeline = rs.pipeline()
+    config = rs.config()
 
-    # Öffne die Kamera
-    dev = openni2.Device.open_any()
+    # Get device product line for setting a supporting resolution
+    pipeline_wrapper = rs.pipeline_wrapper(pipeline)
+    pipeline_profile = config.resolve(pipeline_wrapper)
+    device = pipeline_profile.get_device()
 
-    # Öffne den Farbsensor und den Tiefensensor
-    color_stream = dev.create_color_stream()
+    found_rgb = False
+    for s in device.sensors:
+        if s.get_info(rs.camera_info.name) == 'RGB Camera':
+            found_rgb = True
+            break
+    if not found_rgb:
+        print("The demo requires Depth camera with Color sensor")
+        exit(0)
 
-    # Starte beide Streams
-    color_stream.start()
+    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+
+    # Start streaming
+    pipeline.start(config)
     try:
         while True:
-            color_image = readAsusXtionCamera.read_Depth_Camera_only_color(color_stream)
-            calculationOutput = calculateRGB.calculate_Colors(color_image)
+            color_and_depth_image = readIntelD415Camera.read_Depth_Camera(pipeline)
+            calculationOutput = calculateRGB.calculate_Colors(color_and_depth_image["color"])
             ret, beamerOutput = showRGB.show_Colors(calculationOutput)
             if not ret:
                 continue  # Wenn die Bildkonvertierung fehlschlägt, überspringe diesen Frame
@@ -59,25 +90,34 @@ def color_video():
             yield beamerOutput
 
     finally:
-        # Stoppe den Farbsensor und schließe OpenNI2
-        color_stream.stop()
-        openni2.unload()
+        # Ressourcen freigeben
+        pipeline.stop()
         cv2.destroyAllWindows()
 
 def objects_video():
-    # Initialisiere OpenNI2
-    openni2.initialize()
+    # Configure depth and color streams
+    pipeline = rs.pipeline()
+    config = rs.config()
 
-    # Öffne die Kamera
-    dev = openni2.Device.open_any()
+    # Get device product line for setting a supporting resolution
+    pipeline_wrapper = rs.pipeline_wrapper(pipeline)
+    pipeline_profile = config.resolve(pipeline_wrapper)
+    device = pipeline_profile.get_device()
 
-    # Öffne den Farbsensor und den Tiefensensor
-    color_stream = dev.create_color_stream()
-    depth_stream = dev.create_depth_stream()
+    found_rgb = False
+    for s in device.sensors:
+        if s.get_info(rs.camera_info.name) == 'RGB Camera':
+            found_rgb = True
+            break
+    if not found_rgb:
+        print("The demo requires Depth camera with Color sensor")
+        exit(0)
 
-    # Starte beide Streams
-    color_stream.start()
-    depth_stream.start()
+    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+
+    # Start streaming
+    pipeline.start(config)
 
     # Maßstab für Tiefenwerte ermitteln (wie viele Meter pro Tiefen-Einheit)
     ###depth_sensor = profile.get_device().first_depth_sensor()
@@ -92,7 +132,7 @@ def objects_video():
 
     try:
         while True:
-            color_and_depth_image = readAsusXtionCamera.read_Depth_Camera(color_stream, depth_stream)
+            color_and_depth_image = readIntelD415Camera.read_Depth_Camera(pipeline)
             building_mask, road_mask, park_mask = detectBuildings.detect_Buildings(color_and_depth_image["depth"], color_and_depth_image["color"], depth_scale, baseline_distance)
             ret, beamerOutput = showObjects.show_Objects(building_mask, road_mask, park_mask)
             if not ret:
@@ -100,26 +140,34 @@ def objects_video():
         
             yield beamerOutput
     finally:
-        # Stoppe die Streams und schließe alle Fenster
-        color_stream.stop()
-        depth_stream.stop()
-        openni2.unload()
+        # Ressourcen freigeben
+        pipeline.stop()
         cv2.destroyAllWindows()
 
 def volume_2D_video():
-    # Initialisiere OpenNI2
-    openni2.initialize()
+    # Configure depth and color streams
+    pipeline = rs.pipeline()
+    config = rs.config()
 
-    # Öffne die Kamera
-    dev = openni2.Device.open_any()
+    # Get device product line for setting a supporting resolution
+    pipeline_wrapper = rs.pipeline_wrapper(pipeline)
+    pipeline_profile = config.resolve(pipeline_wrapper)
+    device = pipeline_profile.get_device()
 
-    # Öffne den Farbsensor und den Tiefensensor
-    color_stream = dev.create_color_stream()
-    depth_stream = dev.create_depth_stream()
+    found_rgb = False
+    for s in device.sensors:
+        if s.get_info(rs.camera_info.name) == 'RGB Camera':
+            found_rgb = True
+            break
+    if not found_rgb:
+        print("The demo requires Depth camera with Color sensor")
+        exit(0)
 
-    # Starte beide Streams
-    color_stream.start()
-    depth_stream.start()
+    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+
+    # Start streaming
+    pipeline.start(config)
 
     # Maßstab für Tiefenwerte ermitteln (wie viele Meter pro Tiefen-Einheit)
     ###depth_sensor = profile.get_device().first_depth_sensor()
@@ -134,7 +182,7 @@ def volume_2D_video():
 
     try:
         while True:
-            color_and_depth_image = readAsusXtionCamera.read_Depth_Camera(color_stream, depth_stream)
+            color_and_depth_image = readIntelD415Camera.read_Depth_Camera(pipeline)
             building_mask, road_mask, park_mask = detectBuildings.detect_Buildings(color_and_depth_image["depth"], color_and_depth_image["color"], depth_scale, baseline_distance)
             calculationOutput = calculate2DVolume.calculate_2D_Volume(color_and_depth_image['depth'], building_mask, road_mask, park_mask)
             ret, beamerOutput = show2DVolume.show_2D_Volume(calculationOutput)
@@ -143,37 +191,46 @@ def volume_2D_video():
         
             yield beamerOutput
     finally:
-        # Stoppe die Streams und schließe alle Fenster
-        color_stream.stop()
-        depth_stream.stop()
-        openni2.unload()
+        # Ressourcen freigeben
+        pipeline.stop()
         cv2.destroyAllWindows()
         
 def hights_video():
-    # Initialisiere OpenNI2
-    openni2.initialize()
+    # Configure depth and color streams
+    pipeline = rs.pipeline()
+    config = rs.config()
 
-    # Öffne die Kamera
-    dev = openni2.Device.open_any()
+    # Get device product line for setting a supporting resolution
+    pipeline_wrapper = rs.pipeline_wrapper(pipeline)
+    pipeline_profile = config.resolve(pipeline_wrapper)
+    device = pipeline_profile.get_device()
 
-    # Öffne den Farbsensor und den Tiefensensor
-    depth_stream = dev.create_depth_stream()
+    found_rgb = False
+    for s in device.sensors:
+        if s.get_info(rs.camera_info.name) == 'RGB Camera':
+            found_rgb = True
+            break
+    if not found_rgb:
+        print("The demo requires Depth camera with Color sensor")
+        exit(0)
 
-    # Starte beide Streams
-    depth_stream.start()
+    config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+    config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+
+    # Start streaming
+    pipeline.start(config)
     try:
         while True:
-            depth_image = readAsusXtionCamera.read_Depth_Camera_only_depth(depth_stream)
-            calculationOutput = calculateHight.calculate_Hight(depth_image)
+            color_and_depth_image = readIntelD415Camera.read_Depth_Camera(pipeline)
+            calculationOutput = calculateHight.calculate_Hight(color_and_depth_image["depth"])
             ret, beamerOutput = showHight.show_Hights(calculationOutput)
             if not ret:
                 continue  # Wenn die Bildkonvertierung fehlschlägt, überspringe diesen Frame
         
             yield beamerOutput
     finally:
-        # Stoppe die Streams und schließe alle Fenster
-        depth_stream.stop()
-        openni2.unload()
+        # Ressourcen freigeben
+        pipeline.stop()
         cv2.destroyAllWindows()
 
 def intel_video():
@@ -204,7 +261,8 @@ def intel_video():
     try:
         while True:
             color_and_depth_image = readIntelD415Camera.read_Depth_Camera(pipeline)
-            ret, beamerOutput = showColorAndDepth.show_Color_And_Depth(cv2.convertScaleAbs(color_and_depth_image["depth"], alpha=0.03), color_and_depth_image["color"])
+            #ret, beamerOutput = showColorAndDepth.show_Color_And_Depth(cv2.convertScaleAbs(color_and_depth_image["depth"], alpha=0.03), color_and_depth_image["color"])
+            ret, beamerOutput = showColorAndDepth.show_Color_And_Depth(np.uint8(color_and_depth_image["depth"]), color_and_depth_image["color"])
             if not ret:
                 continue  # Wenn die Bildkonvertierung fehlschlägt, überspringe diesen Frame
         
