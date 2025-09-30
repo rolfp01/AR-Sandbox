@@ -127,16 +127,16 @@ class LaptopCameraManager(BaseCameraManager):
         print("Laptop-Kamera gestoppt")
 
 
-class AsusXtionCameraManager(BaseCameraManager):
-    """Manager für Asus XtionPRO Live Tiefenkamera über OpenNI2 (primesense)"""
-    
+class AsusXtionCameraManager:
     def __init__(self):
-        super().__init__()
         self.device = None
         self.color_stream = None
         self.depth_stream = None
-        self.openni2_initialized = False
-
+        
+        # Attribute hinzufügen, damit der Zugriff funktioniert
+        self.depth_scale = 0.001  # Beispiel: 1 mm = 0.001 m (kann angepasst werden)
+        self.baseline_distance = None  # Wenn du es hast, sonst None
+    
     def start(self):
         init_openni2()
         self.device = openni2.Device.open_any()
@@ -144,52 +144,16 @@ class AsusXtionCameraManager(BaseCameraManager):
             raise RuntimeError("OpenNI2 Gerät konnte nicht geöffnet werden")
 
         self.color_stream = self.device.create_color_stream()
-        if not self.color_stream:
-            raise RuntimeError("Farb-Stream konnte nicht erstellt werden")
         self.color_stream.start()
 
         self.depth_stream = self.device.create_depth_stream()
-        if not self.depth_stream:
-            raise RuntimeError("Tiefen-Stream konnte nicht erstellt werden")
         self.depth_stream.start()
 
-        print("Asus XtionPRO Live erfolgreich initialisiert (OpenNI2/primesense)")
+        print("Asus XtionPRO Live erfolgreich initialisiert")
 
     def read_frame(self):
-        if not self.color_stream or not self.depth_stream:
-            print("[WARNUNG] Kamera-Streams nicht aktiv")
-            return None
-
-        try:
-            # Farbbild lesen
-            c_frame = self.color_stream.read_frame()
-            width, height = c_frame.width, c_frame.height
-            c_data = c_frame.get_buffer_as_uint8()
-
-            if len(c_data) == width * height * 3:
-                color = np.frombuffer(c_data, dtype=np.uint8).reshape((height, width, 3))
-                # RGB zu BGR konvertieren (für OpenCV)
-                color = cv2.cvtColor(color, cv2.COLOR_RGB2BGR)
-            elif len(c_data) == width * height:
-                # 1 Kanal (Graustufen)
-                color = np.frombuffer(c_data, dtype=np.uint8).reshape((height, width))
-                color = cv2.cvtColor(color, cv2.COLOR_GRAY2BGR)
-            else:
-                print(f"[WARNUNG] Unerwartete Farbbildgröße: {len(c_data)} Bytes")
-                return None
-
-            # Tiefenbild lesen
-            d_frame = self.depth_stream.read_frame()
-            depth = np.frombuffer(d_frame.get_buffer_as_uint16(), dtype=np.uint16).reshape((d_frame.height, d_frame.width))
-
-            return {
-                "color": color,
-                "depth": depth
-            }
-
-        except Exception as e:
-            print(f"[FEHLER] Fehler beim Lesen des Kamera-Frames: {e}")
-            return None
+        # Nutze ausgelagerte Funktion
+        return readAsusXtionCamera.read_frames(self.color_stream, self.depth_stream)
 
     def stop(self):
         if self.color_stream:
@@ -198,7 +162,6 @@ class AsusXtionCameraManager(BaseCameraManager):
         if self.depth_stream:
             self.depth_stream.stop()
             self.depth_stream = None
-        # Nicht hier openni2.unload() aufrufen!
         cv2.destroyAllWindows()
         print("Asus XtionPRO Live gestoppt")
 

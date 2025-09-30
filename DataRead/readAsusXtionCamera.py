@@ -1,37 +1,35 @@
 import numpy as np
+import cv2
 
-def read_Depth_Camera(color_stream, depth_stream):
-    # Lese ein Frame vom Farbsensor
-    color_frame = color_stream.read_frame()
-    color_data = color_frame.get_buffer_as_uint8()
-    c_i_un = np.frombuffer(color_data, dtype=np.uint8)
-    color_image = c_i_un.reshape(color_frame.height, color_frame.width, 3)
-
-    # Lese ein Frame vom Tiefensensor
-    depth_frame = depth_stream.read_frame()
-    depth_data = depth_frame.get_buffer_as_uint16()
-    d_i_un = np.frombuffer(depth_data, dtype=np.uint16)
-    depth_image = d_i_un.reshape(depth_frame.height, depth_frame.width)
-
-    return {"color" :color_image, "depth":depth_image}
-
-def read_Depth_Camera_only_color(color_stream):
+def read_frames(color_stream, depth_stream):
+    """
+    Liest Farbbild und Tiefenbild von Asus Xtion Kamera über OpenNI2.
+    Gibt dict mit 'color' und 'depth' zurück oder None bei Fehler.
+    """
     try:
-        color_frame = color_stream.read_frame()
-        color_data = color_frame.get_buffer_as_uint8()
-        color_image = np.frombuffer(color_data, dtype=np.uint8).reshape(
-            (color_frame.height, color_frame.width, 3)
-        )
-        return color_image
-    except Exception as e:
-        print(f"[ERROR] Fehler beim Lesen des Farbbildes: {e}")
-        return None
+        # Farb-Frame lesen
+        c_frame = color_stream.read_frame()
+        width, height = c_frame.width, c_frame.height
+        c_data = c_frame.get_buffer_as_uint8()
 
-      
-def read_Depth_Camera_only_depth(depth_stream):
-    # Lese ein Frame vom Tiefensensor
-    depth_frame = depth_stream.read_frame()
-    depth_data = depth_frame.get_buffer_as_uint16()
-    depth_image = np.frombuffer(depth_data, dtype=np.uint16).reshape((depth_frame.height, depth_frame.width))
-    return depth_image
-    
+        if len(c_data) == width * height * 3:
+            color = np.frombuffer(c_data, dtype=np.uint8).reshape((height, width, 3))
+            color = cv2.cvtColor(color, cv2.COLOR_RGB2BGR)
+        elif len(c_data) == width * height:
+            color = np.frombuffer(c_data, dtype=np.uint8).reshape((height, width))
+            color = cv2.cvtColor(color, cv2.COLOR_GRAY2BGR)
+        else:
+            print(f"[WARNUNG] Unerwartete Farbbildgröße: {len(c_data)} Bytes")
+            return None
+
+        # Tiefenbild lesen
+        d_frame = depth_stream.read_frame()
+        depth = np.frombuffer(d_frame.get_buffer_as_uint16(), dtype=np.uint16).reshape((d_frame.height, d_frame.width))
+
+        return {
+            "color": color,
+            "depth": depth
+        }
+    except Exception as e:
+        print(f"[FEHLER] Fehler beim Lesen der Kamera-Frames: {e}")
+        return None
