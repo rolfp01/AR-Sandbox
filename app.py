@@ -8,7 +8,6 @@ import cv2
 #from openni import openni2
 import pyrealsense2 as rs
 from primesense import openni2
-import os
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
@@ -34,7 +33,7 @@ def unload_openni2():
 # ============================================================================
 # Wähle die Kamera für ALLE Themen:
 # Optionen: 'laptop', 'asus_xtion', 'intel_d415', 'kinect
-ACTIVE_CAMERA = 'asus_xtion'
+ACTIVE_CAMERA = 'laptop'
 
 
 # ============================================================================
@@ -106,7 +105,7 @@ class LaptopCameraManager(BaseCameraManager):
         self.camera = None
     
     def start(self):
-        self.camera = cv2.VideoCapture(0)
+        self.camera = cv2.VideoCapture(0, cv2.CAP_DSHOW)
         print("Laptop-Kamera erfolgreich initialisiert")
     
     def read_frame(self):
@@ -132,7 +131,7 @@ class AsusXtionCameraManager:
         self.device = None
         self.color_stream = None
         self.depth_stream = None
-        
+
         # Attribute hinzufügen, damit der Zugriff funktioniert
         self.depth_scale = 0.001  # Beispiel: 1 mm = 0.001 m (kann angepasst werden)
         self.baseline_distance = None  # Wenn du es hast, sonst None
