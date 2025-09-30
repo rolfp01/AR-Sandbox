@@ -15,58 +15,94 @@ def detect_Buildings(depth_image, color_image, depth_scale, baseline_distance):
 
     # *** Gebäude-Erkennung auf Basis der Höhe (Tiefenbild) ***
     # Wir nehmen an, "Gebäude" sind Bereiche, die deutlich über der umgebenden Sandhöhe liegen.
-    # Ansatz: Schwellwert-Filter auf das Tiefenbild (niedriger Abstand => hohe Struktur).
-    # Berechne eine relative Höhenkarte (inverse Tiefe). 
-    # Wenn baseline_distance bekannt, könnte man hier die absolute Höhe berechnen.
     depth_array = depth_image.astype(np.float32) * depth_scale  # Tiefenwerte in Meter
-    if baseline_distance is not None:
-        # Höhe = Abstand Kamera zum Boden - aktueller Abstand (Meter)
-        height_map = (baseline_distance - depth_array)
-    else:
-        # Ohne bekannten Boden nehmen wir relative Höhe: invertiere aktuelle Tiefenwerte relativ zum Bild
-        # (Kleinerer Tiefenwert => größere Höhe über minimaler Tiefe im Bild)
-        valid = depth_array > 0
-        if np.any(valid):
-            min_depth = depth_array[valid].min()
-            max_depth = depth_array[valid].max()
-        else:
-            min_depth, max_depth = 0, 0
-        height_map = (max_depth - depth_array)  # invers zur Tiefe
 
-    # Normiere Höhe auf 0-255 (für Schwellwertberechnung)
-    height_norm = cv2.normalize(src=height_map, dst=None, alpha=0, beta=255, norm_type=cv2.NORM_MINMAX).astype(np.uint8)
-    # Schwellwert setzen (z.B. oberste 20% der Höhe als Gebäude markieren)
-    _, building_mask = cv2.threshold(height_norm, 204, 255, cv2.THRESH_BINARY)
-    # Morphologische Öffnung anwenden, um Rauschen zu entfernen (entfernt kleine Pixel) [oai_citation_attribution:5‡docs.opencv.org](https://docs.opencv.org/4.x/d9/d61/tutorial_py_morphological_ops.html#:~:text=3)
-    kernel = np.ones((3, 3), np.uint8)
-    building_mask = cv2.morphologyEx(building_mask, cv2.MORPH_OPEN, kernel)
+    # Invertiere Tiefe zur "Höhe"
+    valid = depth_array > 0
+    height_map = np.zeros_like(depth_array)
+    if np.any(valid):
+        max_depth = np.max(depth_array[valid])
+        height_map = max_depth - depth_array  # je niedriger der Wert, desto höher das Objekt
 
-    # * Straßen-Erkennung auf Basis von Farbe/Form *
-    # Annahme: Straßen haben charakteristische graue/dunkle Farbe und liegen flach auf Bodenhöhe.
-    # Wir nutzen Farbbild in HSV-Farbraum, um graue Bereiche zu segmentieren.
-    hsv = cv2.cvtColor(color_image, cv2.COLOR_BGR2HSV)
-    # Definiere HSV-Schwellenwerte für "grau"/"asphaltiert":
-    # - Hue: egal (0-179), Sättigung niedrig (wenig Farbe), Value mittel bis hoch (nicht zu dunkel oder zu hell).
-    lower_gray = np.array([0, 0, 50], dtype=np.uint8)
-    upper_gray = np.array([140, 140, 140], dtype=np.uint8)
-    mask_gray = cv2.inRange(hsv, lower_gray, upper_gray)  # liefert binäre Maske der grauen Pixel [oai_citation_attribution:6‡realpython.com](https://realpython.com/python-opencv-color-spaces/#:~:text=Once%20you%20get%20a%20decent,within%20the%20range%2C%20and%20zero)
-    # Optional: Man könnte zusätzlich prüfen, ob diese Pixel nahe der Grundhöhe sind (per Tiefendaten),
-    # um z.B. Schatten oder andere graue Objekte auszuschließen. Hier wird vereinfachend nur die Farbe genutzt.
-    road_mask = mask_gray.copy()
-    # Morphologische Operationen, um die Masken zu säubern (Rauschen entfernen, Lücken schließen):
+    # Lokale Mittelwert-Glättung, um Umgebungshöhe zu schätzen
+    blurred_height = cv2.blur(height_map, (15, 15))
+    relative_height = height_map - blurred_height  # Positive Werte = über Umgebung
+
+    # Binärmaske für "potenziell hohes Objekt"
+    raw_building_mask = (relative_height > 0.02).astype(np.uint8) * 255  # ab 2 cm über Umgebung
+    abs_height_mask = (height_map > 0.04).astype(np.uint8) * 255  # 4 cm
+    raw_building_mask = cv2.bitwise_and(raw_building_mask, abs_height_mask)
+
+    # Morphologische Glättung
     kernel = np.ones((5, 5), np.uint8)
-    road_mask = cv2.morphologyEx(road_mask, cv2.MORPH_OPEN, kernel)   # kleine Störpixel entfernen [oai_citation_attribution:7‡docs.opencv.org](https://docs.opencv.org/4.x/d9/d61/tutorial_py_morphological_ops.html#:~:text=3)
-    road_mask = cv2.morphologyEx(road_mask, cv2.MORPH_CLOSE, kernel)  # Lücken in Straßensegmenten schließen [oai_citation_attribution:8‡docs.opencv.org](https://docs.opencv.org/4.x/d9/d61/tutorial_py_morphological_ops.html#:~:text=4)
+    clean_building_mask = cv2.morphologyEx(raw_building_mask, cv2.MORPH_OPEN, kernel)
+    clean_building_mask = cv2.morphologyEx(clean_building_mask, cv2.MORPH_CLOSE, kernel)
 
-    # * Park-Erkennung auf Basis von Farbe *
+    # Konturbasierte Selektion: kompakte, große Objekte
+    building_mask = np.zeros_like(clean_building_mask)
+    contours, _ = cv2.findContours(clean_building_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < 100:
+            continue  # zu klein
+
+        # Kompaktheit: Kreisförmige Objekte (z. B. Hügel) sind meist weniger "eckig"
+        perimeter = cv2.arcLength(cnt, True)
+        if perimeter == 0:
+            continue
+
+        compactness = (4 * np.pi * area) / (perimeter ** 2)  # 1 = Kreis, < 1 = eckiger
+        if compactness < 0.6:  # zu rund = eher Hügel
+            cv2.drawContours(building_mask, [cnt], -1, 255, -1)
+
+    # *** Straßen-Erkennung auf Basis von Farbe/Form ***
+    # 1. Farbbasierte Grau-Erkennung im HSV
+    hsv = cv2.cvtColor(color_image, cv2.COLOR_BGR2HSV)
+    v_channel = hsv[:, :, 2]
+
+    # Maske für dunkle Flächen
+    dark_mask = cv2.inRange(v_channel, 0, 120)
+
+    # Sättigung
+    s_channel = hsv[:, :, 1]
+    mask_saturation = cv2.inRange(s_channel, 10, 100)
+
+    # Kombiniere Masken: dunkel + moderate Sättigung (kein Schatten)
+    road_candidate_mask = cv2.bitwise_and(dark_mask, mask_saturation)
+
+    # Morphologische Filterung
+    kernel = np.ones((3, 3), np.uint8)
+    road_mask_clean = cv2.morphologyEx(road_candidate_mask, cv2.MORPH_OPEN, kernel)
+    road_mask_clean = cv2.morphologyEx(road_mask_clean, cv2.MORPH_CLOSE, kernel)
+
+    # Konturenerkennung wie gehabt
+    road_mask = np.zeros_like(road_mask_clean)
+    contours, _ = cv2.findContours(road_mask_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area < 200:
+            continue
+
+        x, y, w, h = cv2.boundingRect(cnt)
+        aspect_ratio = max(w / h, h / w)
+
+        if aspect_ratio > 1.0:
+            cv2.drawContours(road_mask, [cnt], -1, 255, -1)
+
+    # *** Park-Erkennung auf Basis von Farbe ***
     # Annahme: Parks sind durch grüne Flächen repräsentiert (z.B. Grünfläche).
     # Segmentiere Grün-Töne im HSV-Farbraum.
-    lower_green = np.array([35, 60, 20], dtype=np.uint8)   # untere Grenze für Grün (Hue ca. 35-85)
-    upper_green = np.array([85, 255, 255], dtype=np.uint8)  # Sättigung und Value recht hoch
+    lower_green = np.array([30, 60, 20], dtype=np.uint8)   # untere Grenze für Grün (Hue ca. 35-85)
+    upper_green = np.array([90, 255, 255], dtype=np.uint8)  # Sättigung und Value recht hoch
     mask_green = cv2.inRange(hsv, lower_green, upper_green)
-    park_mask = mask_green.copy()
-    # Morphologische Glättung (Öffnen/Schließen) für Parkmaske
-    park_mask = cv2.morphologyEx(park_mask, cv2.MORPH_OPEN, kernel)
-    park_mask = cv2.morphologyEx(park_mask, cv2.MORPH_CLOSE, kernel)
+
+    lab = cv2.cvtColor(color_image, cv2.COLOR_BGR2Lab)
+    l, a, b = cv2.split(lab)
+    green_lab_mask = cv2.inRange(a, 80, 140)  # experimentell anpassen
+
+    # Kombiniere HSV und LAB
+    park_mask = cv2.bitwise_and(mask_green, green_lab_mask)
 
     return building_mask, road_mask, park_mask

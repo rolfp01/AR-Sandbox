@@ -3,9 +3,13 @@ import pyrealsense2 as rs
 
 def read_Depth_Camera(pipeline):
     # Warten auf neue Frames
+    align_to = rs.stream.color
+    align = rs.align(align_to)
     frames = pipeline.wait_for_frames()
-    color_frame = frames.get_color_frame()
-    depth_frame = frames.get_depth_frame()
+    aligned_frames = align.process(frames)
+    color_frame = aligned_frames.get_color_frame()
+    depth_frame = aligned_frames.get_depth_frame()
+
 
     # Threshold Filter initialisieren
     threshold_filter = rs.threshold_filter()

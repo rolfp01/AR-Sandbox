@@ -33,7 +33,7 @@ def unload_openni2():
 # ============================================================================
 # Wähle die Kamera für ALLE Themen:
 # Optionen: 'laptop', 'asus_xtion', 'intel_d415', 'kinect
-ACTIVE_CAMERA = 'laptop'
+ACTIVE_CAMERA = 'intel_d415'
 
 
 # ============================================================================
@@ -175,6 +175,8 @@ class IntelD415CameraManager(BaseCameraManager):
     def start(self):
         self.pipeline = rs.pipeline()
         self.config = rs.config()
+        self.depth_scale = 0.001  # RealSense üblich
+
         
         # Geräte-Konfiguration
         pipeline_wrapper = rs.pipeline_wrapper(self.pipeline)
@@ -203,8 +205,11 @@ class IntelD415CameraManager(BaseCameraManager):
         return readIntelD415Camera.read_Depth_Camera(self.pipeline)
     
     def stop(self):
-        if self.pipeline:
-            self.pipeline.stop()
+        if self.pipeline is not None:
+            try:
+                self.pipeline.stop()
+            except RuntimeError as e:
+                print(f"Fehler beim Stoppen der Pipeline: {e}")
         cv2.destroyAllWindows()
         print("Intel RealSense D415 gestoppt")
 
