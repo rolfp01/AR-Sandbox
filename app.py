@@ -96,7 +96,6 @@ class KinectCameraManager(BaseCameraManager):
         cv2.destroyAllWindows()
         print("Microsoft Kinect gestoppt")
 
-
 class LaptopCameraManager(BaseCameraManager):
     """Manager für Laptop-Kamera (Webcam)"""
     
@@ -124,7 +123,6 @@ class LaptopCameraManager(BaseCameraManager):
             self.camera.release()
         cv2.destroyAllWindows()
         print("Laptop-Kamera gestoppt")
-
 
 class AsusXtionCameraManager:
     def __init__(self):
@@ -303,7 +301,7 @@ def process_objects_video(camera, frame_data):
         camera.depth_scale, 
         camera.baseline_distance
     )
-    ret, beamer_output = showObjects.show_Objects(building_mask, road_mask, park_mask)
+    ret, beamer_output = showObjects.show_Objects(building_mask, road_mask, park_mask, frame_data["color"])
     return beamer_output if ret else None
 
 

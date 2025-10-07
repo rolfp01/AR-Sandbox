@@ -1,29 +1,88 @@
 import numpy as np
 import pyrealsense2 as rs
+import cv2
 
 def read_Depth_Camera(pipeline):
-    # Warten auf neue Frames
+    """
+    OPTIMIERTE Kamera-Auslesung - OHNE Warmup
+    Fokus auf maximale Bildqualität und Stabilität
+    """
+    
+    # Frames abrufen und alignieren
     align_to = rs.stream.color
     align = rs.align(align_to)
     frames = pipeline.wait_for_frames()
     aligned_frames = align.process(frames)
+    
     color_frame = aligned_frames.get_color_frame()
     depth_frame = aligned_frames.get_depth_frame()
-
-
-    # Threshold Filter initialisieren
-    threshold_filter = rs.threshold_filter()
-    threshold_filter.set_option(rs.option.min_distance, 0.5)  # in Metern
-    threshold_filter.set_option(rs.option.max_distance, 0.9)  # in Metern
-    filtered_depth = threshold_filter.process(depth_frame)
-
-
-    # Frames in numpy-Arrays umwandeln
-    color_image = np.asanyarray(color_frame.get_data())
-    depth_image = np.asanyarray(filtered_depth.get_data())
-
-    # Einfach: mit rechten Nachbarwerten füllen
-    depth_image[:, :60] = depth_image[:, 60:120]
-
-    return {"color" :color_image, "depth":depth_image}
     
+    if not depth_frame or not color_frame:
+        return None
+    
+    # ========================================================================
+    # OPTIMIERTE FILTER-PIPELINE
+    # ========================================================================
+    
+    # 1. DECIMATION - reduziert Auflösung für bessere Performance (optional)
+    # Kommentiere aus, wenn du volle Auflösung willst
+    # decimation = rs.decimation_filter()
+    # decimation.set_option(rs.option.filter_magnitude, 2)
+    # depth_frame = decimation.process(depth_frame)
+    
+    # 2. THRESHOLD - Bereich begrenzen (ZUERST!)
+    threshold_filter = rs.threshold_filter()
+    threshold_filter.set_option(rs.option.min_distance, 0.15)  # 15cm
+    threshold_filter.set_option(rs.option.max_distance, 1.5)   # 150cm
+    depth_frame = threshold_filter.process(depth_frame)
+    
+    # 3. DISPARITY TRANSFORM - für bessere Filter-Performance
+    depth_to_disparity = rs.disparity_transform(True)
+    depth_frame = depth_to_disparity.process(depth_frame)
+    
+    # 4. SPATIAL FILTER - reduziert räumliches Rauschen
+    spatial = rs.spatial_filter()
+    spatial.set_option(rs.option.filter_magnitude, 5)      # Stärker filtern
+    spatial.set_option(rs.option.filter_smooth_alpha, 0.6) # Höhere Glättung
+    spatial.set_option(rs.option.filter_smooth_delta, 25)  # Delta erhöht
+    spatial.set_option(rs.option.holes_fill, 3)            # Loch-Füllung
+    depth_frame = spatial.process(depth_frame)
+    
+    # 5. TEMPORAL FILTER - reduziert zeitliches Rauschen (Flackern!)
+    temporal = rs.temporal_filter()
+    temporal.set_option(rs.option.filter_smooth_alpha, 0.5)  # Mittelstark
+    temporal.set_option(rs.option.filter_smooth_delta, 25)
+    depth_frame = temporal.process(depth_frame)
+    
+    # 6. ZURÜCK ZU DEPTH
+    disparity_to_depth = rs.disparity_transform(False)
+    depth_frame = disparity_to_depth.process(depth_frame)
+    
+    # 7. HOLE FILLING - füllt verbleibende Löcher
+    hole_filling = rs.hole_filling_filter()
+    hole_filling.set_option(rs.option.holes_fill, 1)  # Farthest-from-around
+    depth_frame = hole_filling.process(depth_frame)
+    
+    # ========================================================================
+    # NUMPY ARRAYS ERSTELLEN
+    # ========================================================================
+    
+    color_image = np.asanyarray(color_frame.get_data())
+    depth_image = np.asanyarray(depth_frame.get_data())
+    
+    # Linken Rand korrigieren (falls nötig)
+    if depth_image.shape[1] > 60:
+        depth_image[:, :60] = depth_image[:, 60:120]
+    
+    # ZUSÄTZLICHE POST-PROCESSING (optional - für noch bessere Qualität)
+    
+    # Median-Filter auf Depth (entfernt Salz-Pfeffer-Rauschen)
+    depth_image = cv2.medianBlur(depth_image.astype(np.uint16), 5)
+    
+    # Bilateral Filter auf Color (behält Kanten, glättet Flächen)
+    color_image = cv2.bilateralFilter(color_image, d=5, sigmaColor=50, sigmaSpace=50)
+    
+    return {
+        "color": color_image, 
+        "depth": depth_image
+    }

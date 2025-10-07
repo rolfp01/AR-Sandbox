@@ -1,7 +1,7 @@
 import numpy as np
 import cv2
 
-def show_Objects(building_mask, road_mask, park_mask):
+def show_Objects(building_mask, road_mask, park_mask, color_image):
     # Bildgröße von einer der Masken ableiten
     height, width = building_mask.shape
 
@@ -19,10 +19,15 @@ def show_Objects(building_mask, road_mask, park_mask):
     # Parks (grün, volle Deckkraft)
     if np.any(park_mask):
         output_img[park_mask > 0] = (0, 255, 0, 255)
+        
+    color_rgba = cv2.cvtColor(color_image, cv2.COLOR_BGR2BGRA)
+    color_rgba[:, :, 3] = 255  # Volle Deckkraft
+
+    # RGB- und Tiefenbild nebeneinander anzeigen
+    images = np.hstack((output_img, color_rgba))
 
     # Als PNG mit Alphakanal encodieren
-    ret, buffer = cv2.imencode('.png', output_img)
-    frame = buffer.tobytes()
-    beamerOutput = (b'--frame\r\nContent-Type: image/png\r\n\r\n' + frame + b'\r\n')
-
+    ret, buffer = cv2.imencode('.png', images)
+    frame = buffer.tobytes() # Bild in Bytes umwandeln
+    beamerOutput = (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
     return ret, beamerOutput
