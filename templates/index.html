@@ -21,8 +21,8 @@
             });
         </script>
     </head>
-    <body style="height: calc(100% - 16px);">
-        <h6 style="margin-bottom: 5px; margin-top: 10px; height: 15px;"><u>Thema:</u> {{ current_theme }} &emsp; &emsp; Mit der T-Taste nächstes Theme aktivieren</h6> 
-        <img src="{{ url_for('video_feed') }}" alt="Kamera Stream" style="height: calc(100% - 30px); display: block;">
+    <body style="height: calc(100% - 16px); margin: 5px;">
+        <!--h6 style="margin-bottom: 5px; margin-top: 10px; height: 15px;"><u>Thema:</u> {{ current_theme }} &emsp; &emsp; Mit der T-Taste nächstes Theme aktivieren</h6--> 
+        <img src="{{ url_for('video_feed') }}" style="height: 100%; display: block;">
     </body>
 </html>

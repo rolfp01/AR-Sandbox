@@ -1,8 +1,86 @@
 import numpy as np
 import pyrealsense2 as rs
 import cv2
+from templates.base_camera_manager import BaseCameraManager
 
-def read_Depth_Camera(pipeline):
+class IntelD415CameraManager(BaseCameraManager):
+    """Manager für Intel RealSense D415 Kamera"""
+    
+    def __init__(self):
+        super().__init__()
+        self.pipeline = None
+        self.config = None
+    
+    def start(self):
+        self.pipeline = rs.pipeline()
+        self.config = rs.config()
+        self.depth_scale = 0.001  # RealSense üblich
+
+        # Geräte-Konfiguration
+        pipeline_wrapper = rs.pipeline_wrapper(self.pipeline)
+        pipeline_profile = self.config.resolve(pipeline_wrapper)
+        device = pipeline_profile.get_device()
+        
+        # RGB-Sensor prüfen
+        found_rgb = False
+        for s in device.sensors:
+            if s.get_info(rs.camera_info.name) == 'RGB Camera':
+                found_rgb = True
+                break
+        
+        if not found_rgb:
+            raise RuntimeError("Intel D415: RGB-Kamera nicht gefunden")
+        
+        # Streams aktivieren
+        self.config.enable_stream(
+            rs.stream.depth, 640, 480, rs.format.z16, 30)
+        self.config.enable_stream(
+            rs.stream.color, 640, 480, rs.format.bgr8, 30)
+        
+        # Pipeline starten
+        self.pipeline.start(self.config)
+        print("Intel RealSense D415 erfolgreich initialisiert")
+    
+    def read_frame(self):
+        return read_Intel_Camera_optimized(self.pipeline)
+    
+    def stop(self):
+        if self.pipeline is not None:
+            try:
+                self.pipeline.stop()
+            except RuntimeError as e:
+                print(f"Fehler beim Stoppen der Pipeline: {e}")
+        cv2.destroyAllWindows()
+        print("Intel RealSense D415 gestoppt")
+
+def read_Intel_Camera(pipeline):
+    # Frames abrufen und alignieren
+    align_to = rs.stream.color
+    align = rs.align(align_to)
+    frames = pipeline.wait_for_frames()
+    aligned_frames = align.process(frames)
+    
+    color_frame = aligned_frames.get_color_frame()
+    depth_frame = aligned_frames.get_depth_frame()
+    
+    if not depth_frame or not color_frame:
+        return None
+    
+    color_image = np.asanyarray(color_frame.get_data())
+    depth_image = np.asanyarray(depth_frame.get_data())
+    
+    # Linken Rand korrigieren (falls nötig)
+    if depth_image.shape[1] > 60:
+        depth_image[:, :60] = 0
+        color_image[:, :60] = 0
+    
+    return {
+        "color": color_image, 
+        "depth": depth_image
+    }
+
+
+def read_Intel_Camera_optimized(pipeline):
     """
     OPTIMIERTE Kamera-Auslesung - OHNE Warmup
     Fokus auf maximale Bildqualität und Stabilität
@@ -32,8 +110,8 @@ def read_Depth_Camera(pipeline):
     
     # 2. THRESHOLD - Bereich begrenzen (ZUERST!)
     threshold_filter = rs.threshold_filter()
-    threshold_filter.set_option(rs.option.min_distance, 0.15)  # 15cm
-    threshold_filter.set_option(rs.option.max_distance, 1.5)   # 150cm
+    threshold_filter.set_option(rs.option.min_distance, 0.6)  # 50cm
+    threshold_filter.set_option(rs.option.max_distance, 0.9)   # 90cm
     depth_frame = threshold_filter.process(depth_frame)
     
     # 3. DISPARITY TRANSFORM - für bessere Filter-Performance
@@ -72,7 +150,7 @@ def read_Depth_Camera(pipeline):
     
     # Linken Rand korrigieren (falls nötig)
     if depth_image.shape[1] > 60:
-        depth_image[:, :60] = depth_image[:, 60:120]
+        depth_image[:, :60] = 0
     
     # ZUSÄTZLICHE POST-PROCESSING (optional - für noch bessere Qualität)
     
@@ -80,7 +158,8 @@ def read_Depth_Camera(pipeline):
     depth_image = cv2.medianBlur(depth_image.astype(np.uint16), 5)
     
     # Bilateral Filter auf Color (behält Kanten, glättet Flächen)
-    color_image = cv2.bilateralFilter(color_image, d=5, sigmaColor=50, sigmaSpace=50)
+    color_image = cv2.bilateralFilter(
+        color_image, d=5, sigmaColor=50, sigmaSpace=50)
     
     return {
         "color": color_image, 

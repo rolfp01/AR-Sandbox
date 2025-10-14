@@ -8,9 +8,9 @@ def show_Objects(building_mask, road_mask, park_mask, color_image):
     # Erstelle ein transparentes RGBA-Bild
     output_img = np.zeros((height, width, 4), dtype=np.uint8)
 
-    # Gebäude (rot, volle Deckkraft)
+    # Gebäude (pink, volle Deckkraft)
     if np.any(building_mask):
-        output_img[building_mask > 0] = (0, 0, 255, 255)  # BGR + Alpha
+        output_img[building_mask > 0] = (147,20,255, 255)  # BGR + Alpha
 
     # Straßen (grau, volle Deckkraft)
     if np.any(road_mask):
@@ -24,10 +24,10 @@ def show_Objects(building_mask, road_mask, park_mask, color_image):
     color_rgba[:, :, 3] = 255  # Volle Deckkraft
 
     # RGB- und Tiefenbild nebeneinander anzeigen
-    images = np.hstack((output_img, color_rgba))
+    # images = np.hstack((output_img, color_rgba))
 
     # Als PNG mit Alphakanal encodieren
-    ret, buffer = cv2.imencode('.png', images)
+    ret, buffer = cv2.imencode('.png', output_img)
     frame = buffer.tobytes() # Bild in Bytes umwandeln
     beamerOutput = (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
     return ret, beamerOutput

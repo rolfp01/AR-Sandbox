@@ -2,12 +2,70 @@ from flask import Flask, redirect, render_template, Response, session, url_for, 
 
 from DataCalculation import calculate2DVolume, calculateHight, calculateRGB, detectBuildings, grayPicture
 from DataRead import readAsusXtionCamera, readLaptopCamera, readIntelD415Camera
+from DataRead import readKinectCamera
 from DataShow import show2DVolume, showGrayPicture, showHight, showRGB, showObjects, showColorAndDepth
+from UserControls import calibration
 import numpy as np
 import cv2
-#from openni import openni2
-import pyrealsense2 as rs
-from primesense import openni2
+
+# Global gespeicherte Homographie
+current_homography = None
+
+def homography_to_css_matrix3d(H):
+    """
+    Konvertiert eine 3x3-Homographiematrix in eine 4x4-Matrix für CSS matrix3d()
+    """
+    # Falls H None ist oder ungültig
+    if H is None or np.array(H).shape != (3, 3):
+        return "1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1"
+
+    H = np.array(H)
+
+    # CSS erwartet eine 4x4 Matrix:
+    # Wir füllen die letzten Zeilen/Spalten auf
+    css_matrix = [
+        H[0][0], H[0][1], 0, H[0][2],
+        H[1][0], H[1][1], 0, H[1][2],
+        0,       0,       1, 0,
+        H[2][0], H[2][1], 0, H[2][2]
+    ]
+    return ','.join(map(lambda x: f"{x:.10f}", css_matrix))
+
+def initial_calibration():
+    global current_homography
+    print("[INFO] Initiale Kalibrierung gestartet...")
+
+    try:
+        camera = create_camera_manager(ACTIVE_CAMERA)
+        print("[INFO] Kamera wird gestartet...")
+        camera.start()
+        print("[INFO] Kamera gestartet, lese Frame...")
+        frame_data = camera.read_frame()
+        print("[INFO] Frame erhalten.")
+        camera.stop()
+        print("[INFO] Kamera gestoppt.")
+
+        if frame_data and frame_data["color"] is not None:
+            frame = frame_data["color"]
+            print("[INFO] Suche ArUco Marker...")
+            result = calibration.find_aruco_markers(frame)
+            print("[INFO] Marker-Suche abgeschlossen.")
+
+            if result is not None:
+                H, points = result
+                if H is not None:
+                    current_homography = H.tolist()
+                    print("[SUCCESS] Homographie erfolgreich initialisiert.")
+                else:
+                    print("[WARNUNG] Homographie konnte nicht berechnet werden.")
+            else:
+                print("[WARNUNG] Nicht genug Marker gefunden.")
+        else:
+            print("[ERROR] Kein gültiger Frame erhalten.")
+
+    except Exception as e:
+        print(f"[FEHLER] Kalibrierung fehlgeschlagen: {e}")
+
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
@@ -15,203 +73,13 @@ app.secret_key = 'your_secret_key'
 # am Programmstart (z.B. ganz oben)
 OPENNI2_INITIALIZED = False
 
-def init_openni2():
-    global OPENNI2_INITIALIZED
-    if not OPENNI2_INITIALIZED:
-        openni_path = "C:\\Program Files\\OpenNI2\\Redist"
-        openni2.initialize(openni_path)
-        OPENNI2_INITIALIZED = True
-
-def unload_openni2():
-    global OPENNI2_INITIALIZED
-    if OPENNI2_INITIALIZED:
-        openni2.unload()
-        OPENNI2_INITIALIZED = False
-
 # ============================================================================
 # Kamera-Konfiguration - HIER ÄNDERN!
 # ============================================================================
 # Wähle die Kamera für ALLE Themen:
 # Optionen: 'laptop', 'asus_xtion', 'intel_d415', 'kinect
 ACTIVE_CAMERA = 'intel_d415'
-
-
-# ============================================================================
-# Kamera-Manager-Klassen
-# ============================================================================
-
-class BaseCameraManager:
-    """Basis-Klasse für alle Kamera-Manager"""
     
-    def __init__(self):
-        self.depth_scale = 1
-        self.baseline_distance = None
-    
-    def start(self):
-        """Startet die Kamera - muss von Unterklassen implementiert werden"""
-        raise NotImplementedError
-    
-    def read_frame(self):
-        """Liest ein Frame - muss von Unterklassen implementiert werden"""
-        raise NotImplementedError
-    
-    def stop(self):
-        """Stoppt die Kamera - muss von Unterklassen implementiert werden"""
-        raise NotImplementedError
-    
-class KinectCameraManager(BaseCameraManager):
-    """Manager für Microsoft Kinect Kamera (Kinect v2) geht nur mit Python 3.8"""
-    
-    def __init__(self):
-        super().__init__()
-        self.kinect = None
-    
-    def start(self):
-        from pykinect2 import PyKinectRuntime, PyKinectV2
-        self.kinect = PyKinectRuntime.PyKinectRuntime(PyKinectV2.FrameSourceTypes_Color | PyKinectV2.FrameSourceTypes_Depth)
-        print("Microsoft Kinect erfolgreich initialisiert")
-    
-    def read_frame(self):
-        if self.kinect.has_new_color_frame() and self.kinect.has_new_depth_frame():
-            color_frame = self.kinect.get_last_color_frame()
-            depth_frame = self.kinect.get_last_depth_frame()
-            
-            # Color Frame in ein numpy Array umwandeln (BGRA 1920x1080)
-            color_image = color_frame.reshape((1080, 1920, 4)).astype(np.uint8)
-            # In BGR konvertieren für OpenCV (falls gewünscht)
-            color_image = cv2.cvtColor(color_image, cv2.COLOR_BGRA2BGR)
-            
-            # Depth Frame (512x424) in numpy Array
-            depth_image = depth_frame.reshape((424, 512)).astype(np.uint16)
-            
-            return {
-                "color": color_image,
-                "depth": depth_image
-            }
-        return None
-    
-    def stop(self):
-        if self.kinect:
-            self.kinect.close()
-        cv2.destroyAllWindows()
-        print("Microsoft Kinect gestoppt")
-
-class LaptopCameraManager(BaseCameraManager):
-    """Manager für Laptop-Kamera (Webcam)"""
-    
-    def __init__(self):
-        super().__init__()
-        self.camera = None
-    
-    def start(self):
-        self.camera = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-        print("Laptop-Kamera erfolgreich initialisiert")
-    
-    def read_frame(self):
-        success, frame = self.camera.read()
-        if success:
-            color_image = readLaptopCamera.read_Laptop_Camera(frame)
-            # Rückgabe im gleichen Format wie andere Kameras
-            return {
-                "color": color_image,
-                "depth": None  # Laptop-Kamera hat keine Tiefendaten
-            }
-        return None
-    
-    def stop(self):
-        if self.camera:
-            self.camera.release()
-        cv2.destroyAllWindows()
-        print("Laptop-Kamera gestoppt")
-
-class AsusXtionCameraManager:
-    def __init__(self):
-        self.device = None
-        self.color_stream = None
-        self.depth_stream = None
-
-        # Attribute hinzufügen, damit der Zugriff funktioniert
-        self.depth_scale = 0.001  # Beispiel: 1 mm = 0.001 m (kann angepasst werden)
-        self.baseline_distance = None  # Wenn du es hast, sonst None
-    
-    def start(self):
-        init_openni2()
-        self.device = openni2.Device.open_any()
-        if not self.device:
-            raise RuntimeError("OpenNI2 Gerät konnte nicht geöffnet werden")
-
-        self.color_stream = self.device.create_color_stream()
-        self.color_stream.start()
-
-        self.depth_stream = self.device.create_depth_stream()
-        self.depth_stream.start()
-
-        print("Asus XtionPRO Live erfolgreich initialisiert")
-
-    def read_frame(self):
-        # Nutze ausgelagerte Funktion
-        return readAsusXtionCamera.read_frames(self.color_stream, self.depth_stream)
-
-    def stop(self):
-        if self.color_stream:
-            self.color_stream.stop()
-            self.color_stream = None
-        if self.depth_stream:
-            self.depth_stream.stop()
-            self.depth_stream = None
-        cv2.destroyAllWindows()
-        print("Asus XtionPRO Live gestoppt")
-
-class IntelD415CameraManager(BaseCameraManager):
-    """Manager für Intel RealSense D415 Kamera"""
-    
-    def __init__(self):
-        super().__init__()
-        self.pipeline = None
-        self.config = None
-    
-    def start(self):
-        self.pipeline = rs.pipeline()
-        self.config = rs.config()
-        self.depth_scale = 0.001  # RealSense üblich
-
-        
-        # Geräte-Konfiguration
-        pipeline_wrapper = rs.pipeline_wrapper(self.pipeline)
-        pipeline_profile = self.config.resolve(pipeline_wrapper)
-        device = pipeline_profile.get_device()
-        
-        # RGB-Sensor prüfen
-        found_rgb = False
-        for s in device.sensors:
-            if s.get_info(rs.camera_info.name) == 'RGB Camera':
-                found_rgb = True
-                break
-        
-        if not found_rgb:
-            raise RuntimeError("Intel D415: RGB-Kamera nicht gefunden")
-        
-        # Streams aktivieren
-        self.config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-        self.config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-        
-        # Pipeline starten
-        self.pipeline.start(self.config)
-        print("Intel RealSense D415 erfolgreich initialisiert")
-    
-    def read_frame(self):
-        return readIntelD415Camera.read_Depth_Camera(self.pipeline)
-    
-    def stop(self):
-        if self.pipeline is not None:
-            try:
-                self.pipeline.stop()
-            except RuntimeError as e:
-                print(f"Fehler beim Stoppen der Pipeline: {e}")
-        cv2.destroyAllWindows()
-        print("Intel RealSense D415 gestoppt")
-
-
 # ============================================================================
 # Kamera-Factory
 # ============================================================================
@@ -219,13 +87,13 @@ class IntelD415CameraManager(BaseCameraManager):
 def create_camera_manager(camera_type):
     """Erstellt den passenden Kamera-Manager basierend auf dem Typ"""
     if camera_type == "laptop":
-        return LaptopCameraManager()
+        return readLaptopCamera.LaptopCameraManager()
     elif camera_type == "asus_xtion":
-        return AsusXtionCameraManager()
+        return readAsusXtionCamera.AsusXtionCameraManager()
     elif camera_type == "intel_d415":
-        return IntelD415CameraManager()
+        return readIntelD415Camera.IntelD415CameraManager()
     elif camera_type == "kinect":
-        return KinectCameraManager()
+        return readKinectCamera.KinectCameraManager()
     else:
         raise ValueError(f"Unbekannter Kamera-Typ: {camera_type}")
 
@@ -322,7 +190,11 @@ def process_volume_2d_video(camera, frame_data):
         road_mask, 
         park_mask
     )
-    ret, beamer_output = show2DVolume.show_2D_Volume(calculation_output)
+    ret, beamer_output = show2DVolume.show_2D_Volume(
+        calculation_output, 
+        building_mask, 
+        road_mask, 
+        park_mask)
     return beamer_output if ret else None
 
 
@@ -382,15 +254,20 @@ videoThemes = [
 
 @app.route('/')
 def index():
-    """Startseite"""
     if 'activeVideoTheme' not in session:
         session['activeVideoTheme'] = 0
-    
+
     current_theme = videoThemes[session['activeVideoTheme']].name
-    
-    return render_template('index.html', 
-                         current_theme=current_theme,
-                         active_camera=ACTIVE_CAMERA)
+
+    # CSS-Matrix für HTML rendern
+    global current_homography
+    css_matrix = homography_to_css_matrix3d(np.array(current_homography)) if current_homography else homography_to_css_matrix3d(None)
+
+    return render_template('index.html',
+                           current_theme=current_theme,
+                           active_camera=ACTIVE_CAMERA,
+                           css_matrix=css_matrix)
+
 
 
 @app.route('/video_feed')
@@ -450,5 +327,6 @@ if __name__ == '__main__':
     print("\nÄndern Sie ACTIVE_CAMERA oben in der Datei,")
     print("um eine andere Kamera zu verwenden!")
     print("=" * 70)
-    
+    # Starte automatische Kalibrierung
+    initial_calibration()
     app.run(debug=True)

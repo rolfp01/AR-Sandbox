@@ -12,59 +12,121 @@ def compute_height_from_depth(depth_image, depth_scale):
     """
     height_map = depth_image.astype(np.float32) * depth_scale
     valid = (height_map > 0)
-    height_map_filtered = cv2.medianBlur(height_map, 5)
+    
+    # Option 1: GaussianBlur (schnell, weiche Glättung)
+    height_map_filtered = cv2.GaussianBlur(height_map, (7, 7), 0)
+    
+    # Option 2: Bilateral Filter (langsamer, erhält Kanten besser)
+    # height_map_filtered = cv2.bilateralFilter(height_map, 9, 75, 75)
+    
+    # Option 3: Median-ähnlich mit scipy (wenn verfügbar, beste Ausreißer-Unterdrückung)
+    # from scipy.ndimage import median_filter
+    # height_map_filtered = median_filter(height_map, size=7)
+    
     return height_map_filtered, valid
 
 def estimate_relative_height(height_map_filtered, valid):
     """
     Schätzt die relative Höhe basierend auf Höhe und gültigen Pixeln.
     """
-    min_h = np.min(height_map_filtered[valid])
-    max_h = np.max(height_map_filtered[valid])
     relative_height = np.zeros_like(height_map_filtered)
-    if max_h == min_h:
-        relative_height[valid] = 0
-    else:
-        relative_height[valid] = (height_map_filtered[valid] - min_h) / (max_h - min_h)
-
+    
+    # Globale relative Höhe
+    if np.any(valid):
+        min_h = np.min(height_map_filtered[valid])
+        max_h = np.max(height_map_filtered[valid])
+        if max_h > min_h:
+            relative_height[valid] = (height_map_filtered[valid] - min_h) / (max_h - min_h)
+    
     return relative_height
 
-def generate_building_candidates(relative_height, height_map_filtered, valid):
+def compute_local_height_difference(height_map_filtered, valid):
+    """
+    Berechnet lokale Höhenunterschiede zur Umgebung.
+    Dies erkennt Bau-Steine auch auf Hügeln, da nur der Sprung gemessen wird.
+    
+    BEISPIEL bei hügeligem Untergrund:
+    - Flacher Sand bei 0cm -> Bauklotz 5cm -> Differenz = 5cm ✓
+    - Hügel bei 10cm -> Bauklotz auf Hügel 15cm -> Differenz = 5cm ✓
+    - Sanfter Hügel 0-10cm -> Differenz ~0cm (kein Bauklotz) ✗
+    
+    Der lokale Durchschnitt (Blur) repräsentiert die "Hügel-Höhe".
+    Die Differenz zeigt nur Objekte, die SPITZ aus der Umgebung herausragen.
+    """
+    # Lokaler Durchschnitt der Umgebung (größerer Kernel für sanfte Hügel)
+    kernel_size = 21  # Muss ungerade sein, größer = erkennt sanftere Hügel
+    local_mean = cv2.blur(height_map_filtered, (kernel_size, kernel_size))
+    
+    # Höhendifferenz: Wie viel höher ist jeder Punkt als seine Umgebung?
+    height_difference = height_map_filtered - local_mean
+    
+    # Nur positive Unterschiede (Objekte die HÖHER sind als Umgebung)
+    height_difference[height_difference < 0] = 0
+    height_difference[~valid] = 0
+    
+    return height_difference
+
+def generate_building_candidates(relative_height, height_map_filtered, valid, height_difference):
     """
     Erzeugt eine binäre Maske der Gebäudekandidaten basierend auf Schwellenwerten.
+    OPTIMIERT für AR Sandbox mit hügeligem Untergrund.
     """
     building_candidate = np.zeros_like(relative_height, dtype=np.uint8)
     
-    # Höhen-Gradient berechnen
-    grad_x = cv2.Sobel(height_map_filtered, cv2.CV_32F, 1, 0, ksize=3)
-    grad_y = cv2.Sobel(height_map_filtered, cv2.CV_32F, 0, 1, ksize=3)
-    gradient_magnitude = cv2.magnitude(grad_x, grad_y)
-
-    # Schwelle für Kanten (Legosteinkanten)
-    edge_mask = gradient_magnitude > 0.01
+    # STRATEGIE 1: Lokale Höhendifferenz (funktioniert bei Hügeln!)
+    # Ein Bau-Stein ist 1-19cm höher als seine unmittelbare Umgebung
+    local_height_mask = (height_difference >= 0.01) & (height_difference <= 0.20)
     
-    # Beispiel: Gebäude, wenn relative Höhe > 0.3 und Höhe > 2 Meter
-    building_candidate[((relative_height > 0.01) & (height_map_filtered > 0.1)) & edge_mask] = 255
+    # STRATEGIE 2: Absolute Höhe (nur als Backup für flachen Untergrund)
+    # Funktioniert wenn Sand relativ flach ist
+    absolute_height_mask = (height_map_filtered >= 0.01) & (height_map_filtered <= 0.20)
+    
+    # STRATEGIE 3: Relative Höhe (für sehr variable Szenen)
+    relative_mask = relative_height > 0.15
+    
+    # Kombiniere: Hauptsächlich lokale Differenz, aber auch andere akzeptieren
+    # ODER-Verknüpfung: Mindestens eine Strategie muss zutreffen
+    building_candidate[(local_height_mask | (absolute_height_mask & relative_mask)) & valid] = 255
+    
+    # Entferne kleine Rauschpunkte
+    kernel_noise = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+    building_candidate = cv2.morphologyEx(building_candidate, cv2.MORPH_OPEN, kernel_noise)
+    
     return building_candidate
 
 def refine_building_mask(building_candidate):
     """
     Verbessert die Gebäudemaske durch morphologische Operationen.
+    OPTIMIERT: Füllt Gebäude vollständig aus, nicht nur Ränder.
     """
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5,5))
-    building_candidate = cv2.morphologyEx(building_candidate, cv2.MORPH_CLOSE, kernel)
-    building_candidate = cv2.morphologyEx(building_candidate, cv2.MORPH_OPEN, kernel)
+    # 1. Schließe kleine Lücken innerhalb der Gebäude
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9,9))
+    building_candidate = cv2.morphologyEx(building_candidate, cv2.MORPH_CLOSE, kernel_close)
+    
+    # 2. Entferne kleine Rauschregionen außerhalb
+    kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5,5))
+    building_candidate = cv2.morphologyEx(building_candidate, cv2.MORPH_OPEN, kernel_open)
+    
+    # 3. Dilatation um sicherzustellen, dass Gebäude zusammenhängend sind
+    kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7,7))
+    building_candidate = cv2.dilate(building_candidate, kernel_dilate, iterations=1)
+    
     return building_candidate
 
 def filter_building_contours(building_candidate):
     """
     Filtert Gebäudekonturen nach Fläche und Form.
+    OPTIMIERT: Akzeptiert verschiedene Klötzchen-Gebäudegrößen.
     """
     contours, _ = cv2.findContours(building_candidate, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     building_mask = np.zeros_like(building_candidate)
     for cnt in contours:
         area = cv2.contourArea(cnt)
-        if 100 < area < 5000:  # Minimalfläche für Gebäude
+        # Sehr breiter Bereich für verschiedene Klötzchen-Größen
+        # Minimum: kleine 2x2 Gebäude-Steine (~30 Pixel)
+        # Maximum: große Konstruktionen (~15000 Pixel)
+        if 30 < area < 15000:
+            # Fülle die Kontur vollständig
             cv2.drawContours(building_mask, [cnt], -1, 255, thickness=cv2.FILLED)
     return building_mask
 
@@ -82,31 +144,14 @@ def smooth_building_mask(building_mask):
 
 def extract_road_candidates(hsv):
     """
-    Extrahiert potenzielle Straßenbereiche basierend auf Farbsegmentierung im HSV-Bereich.
+    Extrahiert potenzielle Straßenbereiche (dunkler Papierstreifen) im HSV-Bereich.
+    OPTIMIERT für AR Sandbox mit dunkelgrauem Papier.
     """
     # Beispiel für helle Grau- bis Weißtöne (Straßenfarbe)
     lower_road = np.array([90,30,30])
     upper_road = np.array([130,150,150])
     road_candidate_mask = cv2.inRange(hsv, lower_road, upper_road)
     return road_candidate_mask
-
-def extract_sand_areas(hsv):
-    """
-    Extrahiert Sandbereiche aus dem HSV-Bild.
-    """
-    # Beispiel für sandige Farbtöne (gelblich)
-    lower_sand = np.array([0,0,130])
-    upper_sand = np.array([30,20,180])
-    sand_mask = cv2.inRange(hsv, lower_sand, upper_sand)
-    return sand_mask
-
-def subtract_sand_from_road(road_mask, sand_mask, hsv):
-    """
-    Entfernt Sandbereiche aus der Straßenmaske.
-    """
-    # Optionale Verfeinerung: Schließe sandige Stellen aus
-    road_mask[sand_mask > 0] = 0
-    return road_mask
 
 def postprocess_road_mask(road_mask):
     """
@@ -120,6 +165,7 @@ def postprocess_road_mask(road_mask):
 def filter_road_contours(road_mask):
     """
     Filtert Straßenkonturen basierend auf Fläche und Form.
+    OPTIMIERT für langen Papierstreifen in AR Sandbox.
     """
     contours, _ = cv2.findContours(road_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     filtered_mask = np.zeros_like(road_mask)
@@ -155,18 +201,30 @@ def correct_shadow_effects(building_mask, road_mask):
 
 def detect_parks(color_image):
     """
-    Erkennung von Parks (grüne Flächen) basierend auf Farbsegmentierung.
+    Erkennung von Parks (grüne Papierschnipsel) basierend auf Farbsegmentierung.
+    OPTIMIERT für AR Sandbox mit grünem Papier.
     """
     hsv = cv2.cvtColor(color_image, cv2.COLOR_BGR2HSV)
-    lower_green = np.array([30, 60, 20])
+    
+    # Grüne Farbbereiche (breiter für verschiedene Grüntöne)
+    lower_green = np.array([35, 40, 40])
     upper_green = np.array([90, 255, 255])
     park_mask = cv2.inRange(hsv, lower_green, upper_green)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15,15))
+    # Morphologie: Schließe Lücken zwischen Papierschnipseln
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9,9))
     park_mask = cv2.morphologyEx(park_mask, cv2.MORPH_CLOSE, kernel)
     park_mask = cv2.morphologyEx(park_mask, cv2.MORPH_OPEN, kernel)
+    
+    # Entferne sehr kleine Schnipsel (Rauschen)
+    contours, _ = cv2.findContours(park_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    filtered_park = np.zeros_like(park_mask)
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area > 50:  # Mindestgröße für Papierschnipsel
+            cv2.drawContours(filtered_park, [cnt], -1, 255, thickness=cv2.FILLED)
 
-    return park_mask
+    return filtered_park
 
 # ===============================================
 # Hilfsfunktion zur Konfliktauflösung der Masken
@@ -184,37 +242,89 @@ def resolve_mask_conflicts(building_mask, road_mask, park_mask):
     return road_mask, park_mask
 
 # ===============================================
-# Hilfsfunktion für zeitliche Filterung
+# Debug-Hilfsfunktion (optional)
 # ===============================================
 
-# Dummy Implementation – bitte anpassen, falls ein Objekt temporal gefiltert werden soll
-def apply_temporal_filter(building_mask, road_mask, park_mask):
+def visualize_detection_debug(color_image, depth_image, building_mask, road_mask, park_mask, 
+                               height_map_filtered=None, show=True):
     """
-    Filtert Masken zeitlich, um Rauschen zu reduzieren.
+    Visualisiert die Erkennungsergebnisse zur Fehleranalyse.
+    Zeigt Original, Tiefenkarte und alle drei Masken.
     """
-    # Beispiel: keine zeitliche Filterung in dieser Version
-    return building_mask, road_mask, park_mask
+    import matplotlib.pyplot as plt
+    
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    
+    # Zeile 1: Eingaben
+    axes[0, 0].imshow(cv2.cvtColor(color_image, cv2.COLOR_BGR2RGB))
+    axes[0, 0].set_title('Original RGB')
+    axes[0, 0].axis('off')
+    
+    if height_map_filtered is not None:
+        im = axes[0, 1].imshow(height_map_filtered, cmap='jet')
+        axes[0, 1].set_title('Höhenkarte (m)')
+        axes[0, 1].axis('off')
+        plt.colorbar(im, ax=axes[0, 1])
+    
+    axes[0, 2].imshow(depth_image, cmap='gray')
+    axes[0, 2].set_title('Tiefenbild')
+    axes[0, 2].axis('off')
+    
+    # Zeile 2: Erkennungsergebnisse
+    axes[1, 0].imshow(building_mask, cmap='Reds')
+    axes[1, 0].set_title('Gebäude (Rot)')
+    axes[1, 0].axis('off')
+    
+    axes[1, 1].imshow(road_mask, cmap='Greys')
+    axes[1, 1].set_title('Straßen (Grau)')
+    axes[1, 1].axis('off')
+    
+    axes[1, 2].imshow(park_mask, cmap='Greens')
+    axes[1, 2].set_title('Parks (Grün)')
+    axes[1, 2].axis('off')
+    
+    plt.tight_layout()
+    if show:
+        plt.show()
+    return fig
 
 # ===============================================
 # Hauptfunktion: detect_Buildings
 # ===============================================
 
-def detect_Buildings(depth_image, color_image, depth_scale, baseline_distance):
+def detect_Buildings(depth_image, color_image, depth_scale, baseline_distance, debug=False):
     """
-    Objekterkennung: Erkennung von Gebäuden, Straßen und Parks 
-    aus Tiefen- und Farb-Bildern.
+    Objekterkennung für AR Sandbox: Erkennung von Gebäuden, Straßen und Parks.
+    
+    OPTIMIERT FÜR:
+    - Gebäude: Eckiger Bauklotz (Höhe 1-19 cm)
+    - Straßen: Dunkler grauer Papierstreifen
+    - Parks: Grüne Papierschnipsel
+    
+    FUNKTIONIERT MIT HÜGELIGEM UNTERGRUND:
+    Verwendet lokale Höhendifferenzen statt absoluter Höhe.
+    Ein 5cm Gebäudestein wird erkannt, egal ob auf flachem Sand (5cm absolut) 
+    oder auf 10cm Hügel (15cm absolut, aber +5cm lokal).
+    
+    WICHTIGE PARAMETER ZUM ANPASSEN:
+    - kernel_size in compute_local_height_difference(): 
+      * Größer (z.B. 31) = ignoriert größere Hügel
+      * Kleiner (z.B. 11) = empfindlicher, aber erkennt kleine Hügel als Gebäude
+    - height_difference Schwelle (0.008-0.20m):
+      * Muss Bauklötzchen-Höhe entsprechen, nicht absolute Höhe!
 
     Parameter:
     - depth_image: Tiefenbild (numpy array)
     - color_image: Farb-Bild (BGR, numpy array)
     - depth_scale: Skalierungsfaktor für Tiefenwerte
     - baseline_distance: Abstand der Kameras (derzeit nicht genutzt)
-    - temporal_filter: optionale zeitliche Filter-Informationen (default None)
+    - debug: Wenn True, gibt zusätzlich die Höhenkarte zurück (default: False)
 
     Rückgabe:
     - building_mask: Binärmaske für erkannte Gebäude
     - road_mask: Binärmaske für erkannte Straßen
     - park_mask: Binärmaske für erkannte Parks
+    - (height_map_filtered): Nur wenn debug=True
     """
 
     # Leere Masken vorbereiten
@@ -231,19 +341,23 @@ def detect_Buildings(depth_image, color_image, depth_scale, baseline_distance):
     if not np.any(valid):
         return building_mask, road_mask, park_mask  # Kein gültiges Tiefenbild
 
-    # 2. Relative Höhe ermitteln
+    # 2. Relative Höhe ermitteln (global)
     relative_height = estimate_relative_height(height_map_filtered, valid)
+    
+    # 3. Lokale Höhendifferenz berechnen (wichtig für Hügel!)
+    height_difference = compute_local_height_difference(height_map_filtered, valid)
 
-    # 3. Gebäude-Kandidaten mit Schwellenwerten erzeugen
-    building_candidate = generate_building_candidates(relative_height, height_map_filtered, valid)
+    # 4. Gebäude-Kandidaten mit mehreren Strategien erzeugen
+    building_candidate = generate_building_candidates(relative_height, height_map_filtered, 
+                                                      valid, height_difference)
 
-    # 4. Morphologische Filterung der Gebäudekandidaten
+    # 5. Morphologische Filterung der Gebäudekandidaten
     building_candidate = refine_building_mask(building_candidate)
 
-    # 5. Kontur-Analyse für endgültige Gebäudemasken
+    # 6. Kontur-Analyse für endgültige Gebäudemasken
     building_mask = filter_building_contours(building_candidate)
 
-    # 6. Glätten der finalen Gebäudemaske
+    # 7. Glätten der finalen Gebäudemaske
     building_mask = smooth_building_mask(building_mask)
 
     # ========================================================================
@@ -256,17 +370,13 @@ def detect_Buildings(depth_image, color_image, depth_scale, baseline_distance):
     # 1. Farbbasierte Masken
     road_candidate_mask = extract_road_candidates(hsv)
 
-    # 2. Sandbereiche herausfiltern
-    sand_mask = extract_sand_areas(hsv)
-    road_candidate_mask = subtract_sand_from_road(road_candidate_mask, sand_mask, hsv)
-
-    # 3. Morphologische Nachbearbeitung
+    # 2. Morphologische Nachbearbeitung
     road_mask_clean = postprocess_road_mask(road_candidate_mask)
 
-    # 4. Konturfilterung für Straßen
+    # 3. Konturfilterung für Straßen (mit Formanalyse)
     road_mask = filter_road_contours(road_mask_clean)
 
-    # 5. Finale Verbindung der Straßen
+    # 4. Finale Verbindung der Straßen
     road_mask = close_road_segments(road_mask)
 
     # ========================================================================
@@ -288,11 +398,10 @@ def detect_Buildings(depth_image, color_image, depth_scale, baseline_distance):
     road_mask, park_mask = resolve_mask_conflicts(building_mask, road_mask, park_mask)
 
     # ========================================================================
-    # ZEITLICHE FILTERUNG
+    # DEBUG-AUSGABE (optional)
     # ========================================================================
-
-    #building_mask, road_mask, park_mask = apply_temporal_filter(
-    #    building_mask, road_mask, park_mask
-    #)
-
+    
+    if debug:
+        return building_mask, road_mask, park_mask, height_map_filtered
+    
     return building_mask, road_mask, park_mask
